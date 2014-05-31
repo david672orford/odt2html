@@ -231,8 +231,10 @@ class Odt2Html(object):
 		# Open the ODT file and show what is inside it
 		self.odt = zipfile.ZipFile(self.odt_filename)
 		if self.debug:
+			print "===== ODT File Contents ====="
 			for resource_filename in self.odt.namelist():
 				print "  %s" % resource_filename
+			print
 
 		# Uncompress and parse the XML streams which we need.
 		styles_xml = self.load_xml("styles.xml")
@@ -826,7 +828,7 @@ class OdtStyle2Css(object):
 	# When you find <styles>, pass it to this function.
 	def add_stylesheet(self, odt_stylesheet):
 		if self.debug:
-			print "odt_style:", odt_stylesheet
+			print "===== Converting ODF Stylesheet ====="
 		dependent = []
 		# Pass 1
 		for style in list(odt_stylesheet):
@@ -836,6 +838,8 @@ class OdtStyle2Css(object):
 		for style in dependent:
 			if not self.add_style(style):
 				raise OdfInvalid("Failed to resolve style: %s %s" % (style.tag, style.attrib))
+		if self.debug:
+			print
 
 	# Take an ODF style tag and its children and convert them to CSS
 	def add_style(self, odt_style):
