@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 25 April 2014
+# Last modified: 28 April 2014
 
 #=============================================================================
 # To the User
@@ -58,6 +58,11 @@
 #   vertical space, but it will fix the bad break permanently in the print
 #   and PDF versions.
 #
+# * If you have indented single-line paragraphs using spaces or tabs, perhaps
+#   to represent a verse from a poem, you should reformat them to use a left
+#   margin. Otherwise when the lines are wrapped on a narrow display, they
+#   may become difficult to read. You may want to use a hanging indentation.
+#
 # * Watch out for superscripts and subscripts. In Openoffice there are
 #   ways to put regular text inside a span of superscript or subscript
 #   text. This will not work in HTML. Writing code to unnest the spans
@@ -65,11 +70,6 @@
 #   it in the source document. Select the text in question, chose 
 #   Format->Clear Direct Formatting, and then select the parts which should
 #   be superscripts or subscripts and again format them as such.
-#
-# * If you have indented single-line paragraphs using spaces or tabs, perhaps
-#   to represent a verse from a poem, you should reformat them to use a left
-#   margin. Otherwise when the lines are wrapped on a narrow display, they
-#   may become difficult to read. You may want to use a hanging indentation.
 #
 # If you correct these problems you will get an HTML version which is
 # reasonably close to the printed or PDF version. But unlike the PDF
@@ -132,9 +132,10 @@
 #
 # == TODO ==
 # * Convert List styles
-# * Reduce the use of styles on individual <td>'s
 # * Implement document background color
 # * Figure out what bookmarks are and whether we should implement them
+# * Drop page numbers from table of contents
+# * Test with weird files from Google Docs
 
 import zipfile
 import sys
@@ -238,6 +239,7 @@ class Odt2Html(object):
 		self.use_data_urls = True
 		self.keep_toc = True
 		self.simplify_table_borders = True
+		self.font_support_level = 1	# 0: weight and slant, 1: generic families, 2: specific families
 		self.debug = debug
 
 		self.depth = 0				# recursion level
@@ -260,7 +262,7 @@ class Odt2Html(object):
 			raise Exception
 
 	#============================================================================
-	# Load styles.xml into an OdtStyle2Css object
+	#
 	#============================================================================
 	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
@@ -277,7 +279,12 @@ class Odt2Html(object):
 		meta_xml = self.load_xml("meta.xml")
 
 		# Parse the styles from styles.xml and content.xml
-		self.styles = OdtStyle2Css(self.debug, self.keep_unused_styles, self.simplify_table_borders)
+		self.styles = OdtStyle2Css(
+			self.debug,
+			self.keep_unused_styles,
+			self.simplify_table_borders,
+			self.font_support_level
+			)
 		for font_face_decls in (
 			styles_xml.xpath("/document-styles/font-face-decls")[0],
 			content_xml.xpath("/document-content/font-face-decls")[0],
@@ -362,6 +369,8 @@ class Odt2Html(object):
 
 		# Strip namespace URIs from tag and attribute names
 		for el in tree.iter():
+			if isinstance(el, ET._Comment):
+				continue
 			el.tag = el.tag.split("}")[1]
 			attrib = {}
 			for name, value in el.attrib.items():
@@ -451,15 +460,20 @@ class Odt2Html(object):
 			level = int(odt_el.attrib['outline-level'])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
-				h_id = "subh%d" % (len(self.h1s) + 1)
+				bookmarks = odt_el.xpath("./bookmark-start")
+				if len(bookmarks) > 0:
+					h_id = bookmarks[0].attrib["name"]
+				else:
+					h_id = "subh%d" % (len(self.h1s) + 1)
 				h_text = element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
 				self.h1s.append((h_id, h_text))
-		elif odt_el.tag == "bookmark-start":				# FIXME: this produces an empty span
-			html_el = E.span()
-			html_el.attrib['id'] = odt_el.attrib['name']
-		elif odt_el.tag == "bookmark-end":					# FIXME: this is just in case text follows
-			html_el = ET.Comment()
+		elif odt_el.tag == "bookmark":
+			html_el = E.span({"dropme":odt_el.tag})
+		elif odt_el.tag == "bookmark-start":
+			html_el = E.span({"dropme":odt_el.tag})
+		elif odt_el.tag == "bookmark-end":
+			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "section":
 			html_el = E.div()
 			# If this is a section of a master document, give it the
@@ -512,21 +526,21 @@ class Odt2Html(object):
 		elif odt_el.tag == "soft-page-break":	# FIXME: read up on this
 			html_el = ET.Comment("soft-page-break")
 		elif odt_el.tag == "tab":
+			if len(odt_el) != 0:
+				raise OdfInvalid("<tab> should not have children")
 			html_el = E.span({"class":"tab"})
-			html_el.text = 8 * u" "				# non-breaking spaces
-			html_el.tail = odt_el.tail
-			html_parent_el.append(html_el)
-			html_el = None
+			html_el.text = 8 * u" "				# eight non-breaking spaces
 		elif odt_el.tag == "s":					# spaces
-			html_el = E.span()
-			if 'c' in odt_el.attrib:
-				count = int(int(odt_el.attrib['c']) * 1.15)		# 1.15 is fudge
+			if len(odt_el) != 0:
+				raise OdfInvalid("<s> should not have children")
+			count = int(odt_el.attrib.get("c","1"))
+			if count == 1:
+				html_el = E.span({"dropme":"s"})
+				html_el.text = " "
 			else:
-				count = 1
-			html_el.text = count * u" "			# non-breaking spaces
-			html_el.tail = odt_el.tail
-			html_parent_el.append(html_el)
-			html_el = None
+				html_el = E.span({"class":"space"})
+				count = int(count * 1.15)			# 1.15 is fudge
+				html_el.text = count * " "
 		elif odt_el.tag == "table":
 			html_el = E.table()
 		elif odt_el.tag == "table-column":
@@ -544,7 +558,7 @@ class Odt2Html(object):
 			if self.simplify_table_borders:
 				style_name = None
 		elif odt_el.tag == "covered-table-cell":
-			html_el = None
+			html_el = None			# don't convert
 		elif odt_el.tag == "list":
 			html_el = E.ul()
 		elif odt_el.tag == "list-header":
@@ -555,27 +569,25 @@ class Odt2Html(object):
 			html_el = self.convert_frame(odt_el)
 			html_el.attrib['style'] = "max-width:%s;max-height:%s" % (odt_el.attrib['height'], odt_el.attrib['height'])
 			convert_children = False
-		elif odt_el.tag == "page-number":
-			html_el = ET.Comment("page number")
-			#html_parent_el.append(html_el)
-			#html_el = None
+		elif odt_el.tag == "page-number":		# FIXME: what about the content (which is an actual page number)?
+			html_el = ET.Comment("page-number")
 		elif odt_el.tag == "table-of-content":
 			if self.keep_toc:
 				html_el = E.div({"id":"toc"})
 			else:
-				html_el = None
+				html_el = None		# don't convert
 		elif odt_el.tag == "table-of-content-source":
 			html_el = None
 		elif odt_el.tag == "index-body":
 			html_el = E.div()
 		elif odt_el.tag == "index-title":
 			html_el = E.div()
-		elif odt_el.tag == "user-defined":		# FIXME: find a way to collapse this
-			html_el = E.span()
+		elif odt_el.tag == "user-defined":
+			html_el = E.span({"class":"user-defined"})	# class is not used
 		elif odt_el.tag == "variable-decls":	# FIXME: is this important?
-			html_el = None
+			html_el = None	# drop children too
 		elif odt_el.tag == "variable-set":		# FIXME: is this important?
-			html_el = None
+			html_el = E.span({"dropme":odt_el.tag})
 		else:									# unimplemented but not supressed
 			#print "  Warning: unimplemented tag: %s" % odt_el.tag
 			#html_el = E.span()
@@ -595,7 +607,7 @@ class Odt2Html(object):
 						self.html_body.append(E.hr())
 
 			if convert_children:
-				# Run through the children collapsing the unnecessary spans
+				# First run through the children collapsing the unnecessary spans
 				# which Openoffice sometimes generates for no appearent reason.
 				collapsed_children = []
 				prev_el = None
@@ -609,17 +621,18 @@ class Odt2Html(object):
 						prev_el.text += el.text
 						if el.tail is not None:
 							prev_el.tail = el.tail
+
 					else:
 						collapsed_children.append(el)
 						prev_el = el
 	
-				# convert the children
+				# Now call this function recursively to convert the children.
 				for el in collapsed_children:
 					self.depth += 1
 					self.convert_element(el, html_el)
 					self.depth -= 1
 
-			# If a <P> tag is completely empty, put a <BR> tag in it because
+			# If a <P> tag is completely empty, put a <BR> tag into it because
 			# in HTML 4 empty <P> tags are supposed to be ignored.
 			if odt_el.tag == "p" and element_empty(html_el):
 				#html_el = E.br()
@@ -635,8 +648,34 @@ class Odt2Html(object):
 						tbody.append(child)
 				html_el.append(tbody)
 
-			# If we aren't subsuming this tag into its parent, add it to its parent.
-			if html_el != html_parent_el:
+			# There are some empty ODF tags which we want to ignore, but we 
+			# cannot ignore them completely because they can come inside runs
+			# of text and we do not want to lose their tail text. Here we
+			# merge their text and tail text into either the parent element or the 
+			# previous sibling element and then drop them.
+			if "dropme" in html_el.attrib:
+				if len(html_el) > 0:
+					raise OdfInvalid("<%s> tag not empty" % html_el.attrib["dropme"])
+				text = ""
+				if html_el.text is not None:
+					text += html_el.text
+				if html_el.tail is not None:
+					text += html_el.tail
+				if text != "":
+					if len(html_parent_el) == 0:
+						if html_parent_el.text is None:
+							html_parent_el.text = ""
+						html_parent_el.text += text
+					else:
+						prev_el = html_parent_el[-1]
+						if prev_el.tail is None:
+							prev_el.tail = ""
+						prev_el.tail += text
+
+			# If we haven't dropped this tag in the previous code block and we
+			# have not subsuming it into its parent, add it to its parent
+			# append it to its parent.
+			elif html_el != html_parent_el:
 				html_parent_el.append(html_el)
 
 	def convert_frame(self, odt_frame):
@@ -690,10 +729,11 @@ class Odt2Html(object):
 			UL { margin: 0 }
 			TH, TD { vertical-align: top }
 			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			SPAN.space { white-space: pre-wrap }
 			DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }
 			DIV#dlbox A { display: inline-block; width: 60pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }
 			@media print { DIV#dlbox { display: none } }
-			DIV.footer { margin-top: 0.5in; font-size: 8pt }
+			DIV.footer { margin-top: 0.2in; font-size: 8pt }
 			""")
 
 		# Add the converted styles from the ODT document.
@@ -888,6 +928,7 @@ class Odt2Html(object):
 			TABLE { border-collapse: collapse }
 			TH, TD { vertical-align: top }
 			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			SPAN.space { white-space: pre-wrap }
 			""")
 
 		# Add the converted styles from the ODT file, again limited to CSS 2.1.
@@ -926,10 +967,12 @@ class OdtStyle2Css(object):
 		"script":"cursive",
 		}
 
-	def __init__(self, debug, keep_unused_styles, simplify_table_borders):
+	def __init__(self, debug, keep_unused_styles, simplify_table_borders, font_support_level):
 		self.debug = debug
 		self.keep_unused_styles = keep_unused_styles
 		self.simplify_table_borders = simplify_table_borders
+		self.font_support_level = font_support_level
+
 		self.css_styles_byselector = {}
 		self.css_styles_byname = {}
 		self.break_before_styles = {}
@@ -942,7 +985,7 @@ class OdtStyle2Css(object):
 		for font_face in odt_font_face_decls:
 			name = font_face.attrib["name"]
 			font_families = []
-			if "font-family" in font_face.attrib:
+			if self.font_support_level >= 2 and "font-family" in font_face.attrib:
 				value = font_face.attrib["font-family"]
 				font_families.append(value)
 			if "font-family-generic" in font_face.attrib:	
@@ -954,8 +997,6 @@ class OdtStyle2Css(object):
 				value = font_face.attrib["font-pitch"]
 				if value == "fixed":
 					font_families.append("monospace")
-			if len(font_families) == 0:
-				raise OdtNotImplemented("font not identified")
 			self.fonts[name] = ",".join(font_families)
 
 	# When you find <styles>, pass it to this function.
@@ -963,11 +1004,11 @@ class OdtStyle2Css(object):
 		if self.debug:
 			print "===== Converting ODF Stylesheet ====="
 		dependent = []
-		# Pass 1
+		# Make one pass.
 		for style in list(odt_stylesheet):
 			if not self.add_style(style):
 				dependent.append(style)
-		# Pass 2--Process styles which had unresolved dependencies during pass 1
+		# Make a second pass to convert styles which had unresolved dependencies.
 		for style in dependent:
 			if not self.add_style(style):
 				raise OdfInvalid("Failed to resolve style: %s %s" % (style.tag, style.attrib))
@@ -1040,9 +1081,12 @@ class OdtStyle2Css(object):
 
 				# Text in blocks or inline
 				if el.tag == "text-properties":
-					if "font-name" in el.attrib:
-						font_name = el.attrib["font-name"]
-						css_style.properties["font-family"] = self.fonts[font_name]
+					if self.font_support_level >= 1:
+						font_name = el.attrib.get("font-name")
+						if font_name is not None:
+							font_family = self.fonts[font_name]
+							if font_family != "":
+								css_style.properties["font-family"] = font_family
 
 					for prop in ("font-size", "font-style", "font-weight", "background-color"):
 						if prop in el.attrib:
@@ -1199,6 +1243,10 @@ if __name__ == "__main__":
 	
 			if os.path.exists(output_filename):
 				os.unlink(output_filename)
+
+			gz_filename = "%s.gz" % output_filename
+			if os.path.exists(gz_filename):
+				os.unlink(gz_filename)
 
 			# Perform the conversion
 			try:
