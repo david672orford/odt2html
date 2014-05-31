@@ -1,0 +1,534 @@
+#! /usr/bin/python
+# encoding=utf-8
+# odt2html
+# Copyright 2014, Trinity College Computing Center
+# Written by David Chappell
+# Last modified: 17 April 2014
+#
+# References:
+# * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
+# * http://docs.oasis-open.org/office/v1.2/OpenDocument-v1.2-part1.html
+# * https://docs.python.org/2/library/xml.etree.elementtree.html
+# * http://lxml.de/
+# * http://eli.thegreenplace.net/2012/03/15/processing-xml-in-python-with-elementtree/
+#
+
+import zipfile
+import sys
+import os
+import lxml.etree as ET
+from lxml.builder import E
+import urllib
+import re
+
+# Is this element empty of text and children?
+def element_empty(el):
+	return el.text is None and el.tail is None and len(list(el)) == 0
+
+# Take an ODT style-name and replace any characters which
+# are not allowed in a CSS class name.
+def stylename2classname(stylename):
+	return stylename.replace('.','_')
+
+# What does a valid dimension look like?
+dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
+
+# Parse the right-hand side of a CSS style setting, find the numeric
+# dimensions and enforce a minimum size. In the process, all units
+# get converted to points.
+def clean_dimensions(style_arg):
+	global dimensions_re
+	words = []
+	for word in style_arg.split(" "):
+		if dimensions_re.match(word):
+			points = dimension2points(word)
+			if points >= 0.8:
+				word = "%.2fpt" % points
+			else:
+				#word = "1px"
+				word = "thin"
+		words.append(word)
+	return " ".join(words)
+
+def dimension2points(dimension):
+	global dimensions_re
+	m = dimensions_re.match(dimension)
+	if m:
+		if m.group(2) == "pt":
+			return float(m.group(1))
+		elif m.group(2) == "in":
+			return float(m.group(1)) * 72.0
+		elif m.group(2) == "mm":
+			return float(m.group(1)) * 72.0 / 25.4
+		elif m.group(2) == "cm":
+			return float(m.group(1)) * 72.0 / 2.54
+		elif m.group(2) == "px":
+			return float(m.group(1)) * 0.72			# about 100 DPI
+	raise Exception("Invalid dimension: %s" % dimension)
+
+class Odt2Html(object):
+	def __init__(self, odt_filename, html_filename, debug):
+		self.odt_filename = odt_filename
+		self.keep_unused_styles = False
+		self.debug = debug
+		self.depth = 0
+
+		# Open the ODT file and show what is inside it
+		self.odt = zipfile.ZipFile(odt_filename)
+		if self.debug:
+			for resource_filename in self.odt.namelist():
+				print "  %s" % resource_filename
+
+		# Load the styles and document text
+		styles_xml = self.load_xml("styles.xml")
+		content_xml = self.load_xml("content.xml")
+
+		# Parse the styles from styles.xml and content.xml
+		self.styles = OdtStyle2Css(self.debug, self.keep_unused_styles)
+		for stylesheet in (
+			styles_xml.xpath("/document-styles/styles")[0],				# from stylesheet UI
+			#styles_xml.xpath("/document-styles/automatic-styles")[0],	# used in master styles
+			content_xml.xpath("/document-content/automatic-styles")[0]	# from element format UI
+			):
+			self.styles.add_stylesheet(stylesheet)
+
+		# Create HTML HEAD and BODY objects into which we can start
+		# to insert objects to represent the output document
+		self.html_head = E.head()
+		self.html_body = E.body()
+		self.html_head.append(E.meta({"charset":"utf-8"}))
+		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
+
+		# Add links to top right
+		dlbox = E.div()
+		self.html_body.append(dlbox)
+		dlbox.attrib["id"] = "dlbox"
+		basename = os.path.splitext(os.path.basename(odt_filename))[0]
+		dlbox.append(E.a(u"Print PDF", {	# <-- space in non-breaking
+			"title":"Download this page as a PDF file for high-quality printing",
+			"href":"%s.pdf" % basename,
+			"type":"application/pdf"
+			}))
+		dlbox.append(E.a(u"Edit ODT", {		# <-- space is non-breaking
+			"title":"Download this page as an Opendocument word processing file",
+			"href":"%s.odt" % basename,
+			"type":"application/vnd.oasis.opendocument.text"
+			}))
+		dlbox[0].tail = ""		# supress newline after first </a> when pretty_print==True
+
+		# Start the conversion
+		for odt_body in content_xml.xpath("/document-content/body/text"):
+			for odt_el in odt_body:
+				self.convert_element(odt_el, self.html_body)
+
+		# Convert the footer
+		odt_footer = styles_xml.xpath("/document-styles/master-styles/master-page[@name='Standard']/footer/p")
+		#print "footer:", odt_footer
+		if len(odt_footer) >= 1:
+			html_footer = E.div({"class":"footer"})
+			self.convert_element(odt_footer[0], html_footer)
+			self.html_body.append(html_footer)
+
+		# Convert the styles to CSS and insert it into the head of the document.
+		self.html_head.append(self.styles.get_css())
+
+		# Write the HTML tree to a file
+		outfh = open(html_filename, "w")
+		outfh.write("<!DOCTYPE HTML>\n")
+		html = E.html(self.html_head, self.html_body)
+		ET.ElementTree(element=html).write(outfh, encoding="utf-8", pretty_print=True)
+
+	# Load one of the XML files embedded in the ODT file
+	def load_xml(self, filename):
+		if self.debug:	
+			print "===== %s =====" % filename
+
+		tree = ET.parse(self.odt.open(filename))
+
+		# Strip namespace URIs from tag and attribute names
+		for el in tree.iter():
+			el.tag = el.tag.split("}")[1]
+			attrib = {}
+			for name, value in el.attrib.items():
+				short_name = name.split("}")[1]
+				del el.attrib[name]
+				el.attrib[short_name] = value
+
+		if self.debug:
+			print ET.tostring(tree, pretty_print=True, encoding="utf-8").decode("utf-8")
+
+		return tree
+
+	# This function converts an ODT element to HTML and adds it to the
+	# parent HTML element specified. It then calls itself on each child
+	# of the ODT element with the newly created HTML element as the 
+	# target parent.
+	def convert_element(self, odt_el, html_parent_el):
+		if odt_el.tag == "sequence-decls":		# mystery
+			html_el = None
+		elif odt_el.tag == "h":
+			html_el = E("h%d" % int(odt_el.attrib['outline-level']))
+		elif odt_el.tag == "section":
+			html_el = E.div()
+		elif odt_el.tag == "p":					# paragraph
+			# If this paragraph is the first one inside an <LI> tag, put everything
+			# inside the <LI> instead since otherwise if the paragraph is indented
+			# it will move away from the bullet.
+			if html_parent_el.tag == "li" and element_empty(html_parent_el):
+				html_el = html_parent_el
+			else:
+				html_el = E.p()
+		elif odt_el.tag == "span":				# text format
+			html_el = E.span()
+			html_el.tail = ""					# <-- prevents newline with pretty_print=True
+		elif odt_el.tag == "a":
+			href = odt_el.attrib["href"]
+			#print "  href: %s" % href
+			if href.startswith("http:"):
+				pass
+			elif href.startswith("../"):
+				# Note: the starting directory for such relative hrefs
+				# is apparently the root of the zip file.
+				href = href[3:]
+				fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href))
+				#print "  fs_path:", fs_path
+				if os.path.exists(fs_path):
+					print "  href: %s" % fs_path
+				else:
+					print "  Warning: broken link: %s" % fs_path
+			else:
+				print "  Warning: Inappropriate href: %s" % href
+			html_el = E.a({"href":href})
+			html_el.tail = ""
+		elif odt_el.tag == "line-break":
+			html_el = E.br()
+		elif odt_el.tag == "tab":
+			html_el = E.span({"class":"tab"})
+			html_el.text = 8 * u" "				# non-breaking spaces
+			html_el.tail = odt_el.tail
+			html_parent_el.append(html_el)
+			html_el = None
+		elif odt_el.tag == "s":					# spaces
+			html_el = E.span()
+			if 'c' in odt_el.attrib:
+				count = int(int(odt_el.attrib['c']) * 1.15)		# 1.15 is fudge
+			else:
+				count = 1
+			html_el.text = count * u" "			# non-breaking spaces
+			html_el.tail = odt_el.tail
+			html_parent_el.append(html_el)
+			html_el = None
+		elif odt_el.tag == "table":
+			html_el = E.table()
+		elif odt_el.tag == "table-column":
+			html_el = E.col()
+		elif odt_el.tag == "table-row":
+			html_el = E.tr()
+		elif odt_el.tag == "table-cell":
+			html_el = E.td()
+			if "number-rows-spanned" in odt_el.attrib:
+				html_el.attrib["rowspan"] = odt_el.attrib["number-rows-spanned"]
+			if "number-columns-spanned" in odt_el.attrib:
+				html_el.attrib["colspan"] = odt_el.attrib["number-columns-spanned"]
+		elif odt_el.tag == "covered-table-cell":
+			html_el = None
+		elif odt_el.tag == "list":
+			html_el = E.ul()
+		elif odt_el.tag == "list-item":
+			html_el = E.li()
+		elif odt_el.tag == "frame":
+			html_el = self.convert_frame(odt_el)
+			html_el.attrib['style'] = "max-width:%s;max-height:%s" % (odt_el.attrib['height'], odt_el.attrib['height'])
+			#html_parent_el.append(html_el)
+			#html_el = None
+		elif odt_el.tag == "page-number":
+			html_el = ET.Comment("page number")
+			html_parent_el.append(html_el)
+			html_el = None
+		else:									# unimplemented but not supressed
+			html_el = E.span()
+
+		if html_el is not None:
+			if odt_el.text is not None:
+				html_el.text = odt_el.text
+			if odt_el.tail is not None:
+				html_el.tail = odt_el.tail
+
+			if "style-name" in odt_el.attrib:
+				style_name = odt_el.attrib['style-name']
+				if self.styles.mark_used(style_name) or self.keep_unused_styles:
+					html_el.attrib['class'] = stylename2classname(style_name)
+				if self.styles.get_break_before(style_name) == "page":
+					self.html_body.append(E.hr())
+
+			# Run through the children collapsing the uncessary spans
+			# which Openoffice sometimes generates for no appearent reason.
+			collapsed_children = []
+			prev_el = None
+			for el in odt_el:
+				if prev_el is not None \
+						and el.tag == "span" and prev_el.tag == "span" \
+						and el.attrib == prev_el.attrib \
+						and prev_el.tail is None \
+						and prev_el.text is not None:
+					#print "collapsed"
+					prev_el.text += el.text
+					if el.tail is not None:
+						prev_el.tail = el.tail
+				else:
+					collapsed_children.append(el)
+					prev_el = el
+
+			# convert the children
+			for el in collapsed_children:
+				self.depth += 1
+				self.convert_element(el, html_el)
+				self.depth -= 1
+
+			# Change truly empty <P> tags to <BR> tags because in HTML 4 empty
+			# <P> tags are supposed to be ignored.
+			if odt_el.tag == "p" and element_empty(html_el):
+				html_el = E.br()
+
+			if html_el != html_parent_el:
+				html_parent_el.append(html_el)
+
+	def convert_frame(self, odt_frame):
+		odt_image = odt_frame.xpath("./image")[0]
+		href = odt_image.attrib['href']
+
+		if href.endswith(".png"):
+			mimetype = "image/png"
+		elif href.endswith(".svg"):
+			mimetype = "image/svg+xml;utf8"
+		else:
+			raise Exception
+
+		img = E.img()
+		data = urllib.quote(self.odt.open(href, "r").read().encode("base64"))
+		img.attrib['src'] = "data:%s;base64,%s" % (mimetype, data)
+		return img
+
+class CssStyle(object):
+	def __init__(self):
+		self.properties = {}
+		self.media = None
+
+class OdtStyle2Css(object):
+	def __init__(self, debug, keep_unused_styles):
+		self.debug = debug
+		self.keep_unused_styles = keep_unused_styles
+		self.css_styles_byselector = {}
+		self.css_styles_byname = {}
+		self.break_before_styles = {}
+		self.style_names = set()
+		self.styles_used = set()
+
+	def add_stylesheet(self, odt_stylesheet):
+		if self.debug:
+			print "odt_style:", odt_stylesheet
+		dependent = []
+		for style in list(odt_stylesheet):
+			if not self.add_style(style):
+				dependent.append(style)
+		for style in dependent:
+			if not self.add_style(style):
+				raise Exception("Failed to resolve style: %s %s" % (style.tag, style.attrib))
+
+	# Take an ODF style tag and its children and convert them to CSS
+	def add_style(self, odt_style):
+		if self.debug:
+			print "  %s %s" % (odt_style.tag, odt_style.attrib)
+		if odt_style.tag == "style":
+			style_name = odt_style.attrib['name']
+			self.style_names.add(style_name)
+			css_style = CssStyle()
+
+			if odt_style.attrib['family'] == "text":
+				tagname = "SPAN"
+			elif odt_style.attrib['family'] == "paragraph":
+				tagname = ""	# P, H[12345], LI
+			elif odt_style.attrib['family'] == "table":
+				tagname = "TABLE"
+			elif odt_style.attrib['family'] == "table-column":
+				tagname = "COL"
+			elif odt_style.attrib['family'] == "table-cell":
+				tagname = "TD"
+			elif odt_style.attrib['family'] == "graphic":
+				tagname = "IMG"
+			elif odt_style.attrib['family'] == "section":
+				tagname = "DIV"
+			else:
+				if self.debug:
+					print "    unimplemented style family"
+				return True
+
+			# If this style has a parent, import its attributes.
+			if "parent-style-name" in odt_style.attrib:
+				try:
+					css_style.properties.update(
+						self.css_styles_byselector[(tagname, odt_style.attrib["parent-style-name"])].properties)
+				except KeyError:
+					print "    deferring loading"
+					return False
+
+			for el in odt_style:
+				if self.debug:
+					print "    %s %s" % (el.tag, odt_style.attrib)
+				if not el.tag.endswith("-properties"):
+					if self.debug:
+						print "      unimplemented style child"
+					continue
+
+				# Generally applicable to block items
+				for prop in (
+						"margin", "margin-left", "margin-right", "margin-top", "margin-bottom",
+						"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
+						"border", "border-left", "border-right", "border-top", "border-bottom"
+					):
+					if prop in el.attrib:
+						value = el.attrib[prop]
+						if value != "100%":		# don't know what 100% is supposed to mean, but it is poison...
+							css_style.properties[prop] = clean_dimensions(value)
+
+				if el.tag == "text-properties":
+					for prop in ("font-size", "font-style", "font-weight"):
+						if prop in el.attrib:
+							css_style.properties[prop] = el.attrib[prop]
+
+					# Style from https://gist.github.com/unruthless/413930
+					if "text-position" in el.attrib:
+						css_style.properties["font-size"] = "75%"
+						css_style.properties["line-height"] = "0"
+						css_style.properties["position"] = "relative"
+						css_style.properties["vertical-align"] = "basename"
+						position = el.attrib["text-position"]
+						if position.startswith("super "):
+							css_style.properties["top"] = "-0.5em"
+						elif position.startswith("sub "):
+							css_style.properties["bottom"] = "-0.25em"
+						else:
+							print "Warning: Unimplemented text-position: %s" % position
+
+				elif el.tag == "paragraph-properties":
+					for prop in ("text-align", "text-indent"):
+						if prop in el.attrib:
+							css_style.properties[prop] = el.attrib[prop]
+					if "break-before" in el.attrib:
+						self.break_before_styles[style_name] = el.attrib["break-before"]
+						# Webkit uses non-standard attribute
+						if el.attrib["break-before"] == "column":
+							css_style.properties["-webkit-column-break-before"] = "always"
+
+				elif el.tag == "table-properties":
+					if "width" in el.attrib:
+						width = el.attrib["width"]
+						if dimension2points(width) > (6.5 * 72.0):
+							width = "100%"
+						css_style.properties["width"] = width
+
+				elif el.tag == "table-column-properties":
+					if "column-width" in el.attrib:
+						css_style.properties["width"] = el.attrib['column-width']
+
+				elif el.tag == "section-properties":
+					for el2 in el:
+						if el2.tag == "columns":
+							for prop in ("column-count", "column-gap"):
+								if prop in el2.attrib:
+									css_style.media = "(min-width:8in)"
+									css_style.properties[prop] = el2.attrib[prop]
+									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
+									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
+
+			if self.debug:
+				print "    -->%s.%s" % (tagname, style_name), css_style.properties
+			self.css_styles_byselector[(tagname, style_name)] = css_style
+			self.css_styles_byname[style_name] = css_style
+
+		return True
+
+	def mark_used(self, style_name):
+		self.styles_used.add(style_name)
+		if not style_name in self.style_names:
+			print "Warning: style %s used but not defined" % style_name
+		return style_name in self.css_styles_byname and len(self.css_styles_byname[style_name].properties) > 0
+
+	def get_break_before(self, style_name):
+		return self.break_before_styles.get(style_name, None)
+
+	def get_css(self):
+		css = []
+
+		# Something to start with
+		css.append("HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }")
+		css.append("BODY { margin: 0.5in }")
+		css.append("@media (max-width: 8in) { BODY { margin: 0.375in 0.125in 0.375in 0.125in } }")
+		css.append("P { margin: 0 }")
+		css.append("UL { margin: 0 }")
+		css.append("TABLE { border-collapse: collapse }")
+		css.append("TH, TD { vertical-align: top }")
+		css.append("HR { margin: 0.5in -0.5in 0.5in -0.5in }")
+
+		# Download Box
+		css.append("DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }")
+		css.append("DIV#dlbox A { display: inline-block; width: 50pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }")
+		css.append("@media print { DIV#dlbox: display: none }")
+		css.append("DIV.footer { margin-top: 0.5in; font-size: 8pt }")
+
+		# The Converted Rules
+		for selector, css_style in self.css_styles_byselector.items():
+			(tagname, stylename) = selector
+			if self.keep_unused_styles or (len(css_style.properties) > 0 and stylename in self.styles_used):
+				style_text = "%s.%s{%s}" % (
+					tagname,
+					stylename2classname(stylename),
+					";".join(["%s:%s" % (name, value) for name, value in css_style.properties.items()])
+					)
+				if css_style.media is not None:
+					style_text = "@media %s { %s }" % (
+						css_style.media,
+						style_text
+						)
+				css.append(style_text)
+
+		# Convert to indented text/css
+		style = E.style({"type": "text/css"})
+		style.text = "\n      " + "\n      ".join(css) + "\n    "
+		return style
+
+if __name__ == "__main__":
+	import codecs
+	sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
+
+	debug = 0
+	if len(sys.argv) >= 2 and sys.argv[1] == '--debug':
+		debug = 1
+		sys.argv.pop(1)
+
+	for filename in sys.argv[1:]:
+		filename = filename.decode("utf-8")		# FIXME: why do we have to do this?
+		print u"\"%s\"" % filename
+
+		basename, ext = os.path.splitext(filename)
+		if ext != ".odt":
+			sys.stderr.write("Not an ODT file.\n")
+			sys.exit(1)
+		filename_output = "%s.html" % basename
+
+		filename_mtime = os.path.getmtime(filename)
+		if debug or not os.path.exists(filename_output) or os.path.getmtime(filename_output) < filename_mtime:
+			print "  rebuilding..."
+	
+			if os.path.exists(filename_output):
+				os.unlink(filename_output)
+
+			# Perform the conversion
+			Odt2Html(filename, filename_output, debug)
+
+			# Make the creation time of the HTML file one millisecond after the
+			# creation time of the ODT file from which it was made.
+			os.utime(filename_output, (filename_mtime + 0.01, filename_mtime + 0.01))
+		else:
+			print "    up-to-date"
+
