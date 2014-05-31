@@ -1,7 +1,12 @@
 all:
 
 install:
-	cp odt2html ~/Russian/"Ready Russian"/bin/
+	cp odt2html /usr/local/bin/odt2html
 
 clean:
-	rm -f test_*.html test_*.epub
+	rm -f tests/test_*.html tests/test_*.epub
+
+commit:
+	git push origin master
+
+
