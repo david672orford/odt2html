@@ -3,7 +3,87 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 23 April 2014
+# Last modified: 25 April 2014
+
+#=============================================================================
+# To the User
+#=============================================================================
+#
+# This program converts Opendocument word-processing files such as those 
+# produced by Openoffice to HTML format. It can also produce EPUB files
+# which are XHTML files packed into a zip archive with some index and
+# metadata files.
+#
+# == Preparing Documents for Conversion ==
+#
+# This program is designed as part of a document preparation workflow to
+# produce high-quality HTML files from robustly-formatted Opendocument
+# word-processing files. Fragile formatting which would break of the font
+# or margins were changed will also break when the document is converted
+# to HTML. Some examples of formatting problems which you should correct:
+#
+# * This program needs to know your document's title. It will look first
+#   in the metadata (go to File->Properties and look under the Description
+#   tab). If the title there is blank, it will look for level 1 headings
+#   and take the first one as the title. If there are no level 1 headings,
+#   the program will stop.
+#
+# * Tabs for formatting tabular data are not supported in HTML. This
+#   converter will insert a few spaces for each tab, but unless the tabs
+#   are used for indenting the start of a line, things will not line up
+#   as you wished. Replace tabbed tables with actual tables. You can turn
+#   the borders off if you wish.
+#
+# * Extra spaces which may have been inserted to adjust line breaking will
+#   probably not work in the HTML version. Even if it does, it will break
+#   when the window size is adjusted. Instead insert an explicit line break
+#   or use non-breaking spaces to prevent a line break at an undesireable
+#   place.
+#
+# * Likewise, extra carriage returns (empty paragraphs) inserted to move a
+#   page break will cause problems. There are no pages in a web browser
+#   window and the extra space will be a visual distraction. Go into
+#   paragraph formatting and in the Text Flow tab put a checkmark next to
+#   "Keep with next paragraph". This not only get rid of the spurious
+#   vertical space, but it will fix the bad break permanently in the print
+#   and PDF versions.
+#
+# * Watch out for superscripts and subscripts. In Openoffice there are
+#   ways to put regular text inside a span of superscript or subscript
+#   text. This will not work in HTML. Writing code to unnest the spans
+#   would be tricky, so we just warn you about it and expect you to fix
+#   it in the source document. Select the text in question, chose 
+#   Format->Clear Direct Formatting, and then select the parts which should
+#   be superscripts or subscripts and again format them as such.
+#
+# If you correct these problems you will get an HTML version which is
+# reasonably close to the printed or PDF version. But unlike the PDF
+# version it will be reflowed to suit the size of the viewer's window.
+# This generally works so well that documents originally formatted for
+# US Letter paper can be read conformatly on the screen of a smartphone.
+#
+# A few CSS tricks improve reading on small screens. For one, the margins
+# are cut from 1/2" to 1/8" for narrow screens. Second, multi-column layout
+# is disabled for narrow screens.
+#
+# == Inter-Document Hyperlinks ==
+#
+# If you create hyperlinks between documents in a set and then convert them
+# all to HTML using this program, the hyperlinks will be converted to link
+# the HTML versions.
+#
+# == Master Documents ==
+#
+# To convert a master document, first export it as an ODT file and convert
+# that.
+#
+# Hyperlinks between the subdocuments of a master document will be converted
+# to internal links within the final document.
+#
+
+#=============================================================================
+# Programmer's Notes
+#=============================================================================
 #
 # == Opendocument ==
 # * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
@@ -18,6 +98,9 @@
 # * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
 # * https://code.google.com/p/python-epub-builder/
 #
+# == TODO ==
+# * Convert List styles
+# * Reduce the use of styles on individual <td>'s
 
 import zipfile
 import sys
@@ -51,6 +134,11 @@ def element_extract_text(el):
 		text += el.tail
 	return text
 					
+# Convert an href which may have pointed to the ODT file to point
+# to the converted version instead.
+def href_html(href):
+	return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
+
 # Take an ODT style-name and replace any characters which
 # are not allowed in a CSS class name.
 def stylename2classname(stylename):
@@ -92,14 +180,17 @@ def dimension2points(dimension):
 			return float(m.group(1)) * 72.0 / 2.54
 		elif m.group(2) == "px":
 			return float(m.group(1)) * 0.72			# about 100 DPI
-	raise OdfUnimplemented("dimension not understood: %s" % dimension)
+	raise OdfNotimplemented("dimension not understood: %s" % dimension)
 
-class OdfUnimplemented(Exception):
+# We don't have this case covered
+class OdfNotimplemented(Exception):
 	pass
 
+# We know abou this case and do not play to support it
 class OdfNotSupported(Exception):
 	pass
 
+# The input file looks corrupt
 class OdfInvalid(Exception):
 	pass
 
@@ -117,9 +208,8 @@ class Odt2Html(object):
 		self.depth = 0				# recursion level
 		self.subdoc_count = 0		# in master document, which subdocument
 		self.subdocs = {}			# in master document, list of subdocuments
-		self.title = ""				# document title
+		self.title = None			# document title
 		self.h1s = []				# level 1 headings
-		self.h1s_bytext = {}
 		self.images = []			# images to include in .epub file
 
 		if output_format == "html":
@@ -151,6 +241,11 @@ class Odt2Html(object):
 
 		# Parse the styles from styles.xml and content.xml
 		self.styles = OdtStyle2Css(self.debug, self.keep_unused_styles)
+		for font_face_decls in (
+			styles_xml.xpath("/document-styles/font-face-decls")[0],
+			content_xml.xpath("/document-content/font-face-decls")[0],
+			):
+			self.styles.add_fonts(font_face_decls)
 		for stylesheet in (
 			styles_xml.xpath("/document-styles/styles")[0],				# from stylesheet UI
 			#styles_xml.xpath("/document-styles/automatic-styles")[0],	# used in master styles
@@ -168,13 +263,17 @@ class Odt2Html(object):
 
 		# Search for the title of the document
 		titles = meta_xml.xpath("/document-meta/meta/title")
-		if len(titles) > 0:
+		if len(titles) > 0 and titles[0].text is not None:
 			self.title = titles[0].text
 		else:
-			headings = content_xml.xpath("/document-content/body/text/h")
+			#headings = content_xml.xpath("/document-content/body/text/h")
+			headings = content_xml.xpath("/document-content/body/text//h")
 			if len(headings) > 0:
-				self.title = headings[0].text
-		self.html_head.append(E.title(self.title))
+				self.title = element_extract_text(headings[0])
+		if self.title is None:
+			raise OdfNotSupported("No document title")
+		else:
+			self.html_head.append(E.title(self.title))
 
 		# Locate ODT document body
 		odt_body = content_xml.xpath("/document-content/body/text")[0]
@@ -222,28 +321,32 @@ class Odt2Html(object):
 	# Pass 1
 	#============================================================================
 	def scan_element(self, odt_el):
-		# Collect the source file names of the sections of a master document
+		# Collect the source file names of the subdocuments of a master document.
+		# We need this information in order to resolve links between subdocuments.
 		if odt_el.tag == "section":
-			if odt_el.attrib.get("protected","false") == "true":
-				section_sources = odt_el.xpath("./section-source")
-				subdoc_href = section_sources[0].attrib['href']
-				subdoc_href = re.sub(r'\.odt$', '.html', subdoc_href, flags=re.IGNORECASE)
+			subdoc_href = self.get_section_source_href(odt_el)
+			if subdoc_href is not None:
 				self.subdoc_count += 1
 				subdoc_id = "subdoc%d" % self.subdoc_count
-				print subdoc_href, subdoc_id
+				print subdoc_id, subdoc_href
 				self.subdocs[subdoc_href] = subdoc_id
-
-		# Collect the names of the level 1 headings and assign them ID's
-		elif odt_el.tag == "h":
-			level = int(odt_el.attrib['outline-level'])
-			if level == 1:
-				h_id = "subh%d" % (len(self.h1s) + 1)
-				h_text = element_extract_text(odt_el)
-				self.h1s.append((h_id, h_text))
-				self.h1s_bytext[h_text] = h_id
 
 		for child_el in odt_el:
 			self.scan_element(child_el)
+
+	# If this section encloses a subdocument of a master document,
+	# return a href to the subdocument with the extension changed
+	# to ".html".
+	def get_section_source_href(self, odt_el):
+		if odt_el.attrib.get("protected","false") != "true":
+			return None
+		section_sources = odt_el.xpath("./section-source")
+		if len(section_sources) == 0:
+			return None
+		if len(section_sources) != 1:
+			raise OdfInvalid("%d <section-source> elements" % len(section_sources))
+		href = section_sources[0].attrib['href']
+		return href_html(href)
 
 	#============================================================================
 	# This function converts an ODT element to HTML and adds it to the
@@ -260,18 +363,20 @@ class Odt2Html(object):
 			level = int(odt_el.attrib['outline-level'])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
+				h_id = "subh%d" % (len(self.h1s) + 1)
 				h_text = element_extract_text(odt_el)
-				h_id = self.h1s_bytext[h_text]
 				html_el.attrib['id'] = h_id
+				self.h1s.append((h_id, h_text))
+		elif odt_el.tag == "bookmark-start":
+			html_el = E.span()
+			html_el.attrib['id'] = odt_el.attrib['name']
 		elif odt_el.tag == "section":
 			html_el = E.div()
-			# If this is a section of a master document,
-			if odt_el.attrib.get("protected","false") == "true":
-				section_sources = odt_el.xpath("./section-source")
-				subdoc_href = section_sources[0].attrib['href']
-				subdoc_href = re.sub(r'\.odt$', '.html', subdoc_href, flags=re.IGNORECASE)
-				subdoc_id = self.subdocs[subdoc_href]
-				html_el.attrib['id'] = subdoc_id
+			# If this is a section of a master document, give it the
+			# ID tag assigned during pass 1.
+			subdoc_href = self.get_section_source_href(odt_el)
+			if subdoc_href is not None:
+				html_el.attrib['id'] = self.subdocs[subdoc_href]
 		elif odt_el.tag == "p":					# paragraph
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
@@ -286,27 +391,28 @@ class Odt2Html(object):
 		elif odt_el.tag == "a":
 			href = odt_el.attrib["href"]
 			#print "  href: %s" % href
-			if href.startswith("http:"):
+			if href.startswith("http:"):		# Internet
 				pass
-			elif href.startswith("../"):
-				# Note: the starting directory for such relative hrefs
-				# is apparently the root of the zip file.
-				if href in self.subdocs:
-					href = "#%s" % self.subdocs[href]
+			elif href.startswith("ftp:"):		# Internet
+				pass
+			elif href.startswith("../"):		# relative to zip root
+				href_html = href_to_html(href)
+				if href_html in self.subdocs:	# in same master document?
+					href = "#%s" % self.subdocs[href_html]
 				else:
+					# Make sure the file named (likely an ODT or HTML file) exists
 					href = href[3:]
 					fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href))
 					if os.path.exists(fs_path):
 						print "  href: %s" % fs_path
 					else:
 						print "  Warning: broken link: %s" % fs_path
-			elif href.startswith("#"):
-				if href.startswith("#__RefHeading__"):
-					convert_children = False		# drop <tab/>Pagenum
-					# ValueError here means that the index is out-of-date
-					href = "#%s" % self.h1s_bytext[odt_el.text]
+					# Whether it exists or not, point to the HTML version
+					href = href_html[3:]
+			elif href.startswith("#"):			# internal link
+				pass
 			else:
-				print "  Warning: href of inappropriate type: %s" % href
+				raise OdfNotImplemented("unimplemented href: %s" % href)
 			html_el = E.a({"href":href})
 			html_el.tail = ""
 		elif odt_el.tag == "line-break":
@@ -425,7 +531,7 @@ class Odt2Html(object):
 			raise OdfNotImplemented("Href extension not recognized: %s" % href)
 
 		# http://www.websiteoptimization.com/speed/tweak/inline-images/
-		img = E.img({"alt":""})
+		img = E.img({"alt":""})		# required for XHTML to validate
 		if self.use_data_urls:
 			img_data = self.odt.open(href, "r").read()
 			img.attrib['src'] = "data:%s;base64,%s" % (mimetype, urllib.quote(img_data.encode("base64")))
@@ -441,8 +547,11 @@ class Odt2Html(object):
 	def save_html(self, html_filename):
 		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
 
+		# The base stylesheet for web browers
 		css = textwrap.dedent("""\
 			HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }
+			BODY { font-size: 12pt }
+			H1, H2, H3, H4, H4 { font-size: inherit }
 			BODY { margin: 0.375in 0.125in 0.375in 0.125in }
 			@media (min-width: 8.5in) { BODY { margin: 0.5in } }
 			P { margin: 0 }
@@ -451,10 +560,12 @@ class Odt2Html(object):
 			TH, TD { vertical-align: top }
 			HR { margin: 0.5in -0.5in 0.5in -0.5in }
 			DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }
-			DIV#dlbox A { display: inline-block; width: 50pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }
+			DIV#dlbox A { display: inline-block; width: 60pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }
 			@media print { DIV#dlbox: display: none }
 			DIV.footer { margin-top: 0.5in; font-size: 8pt }
 			""")
+
+		# Add the converted styles from the ODT document.
 		css += "\n".join(self.styles.get_css(3.0))
 
 		# Insert the CSS styles into the head of the document.
@@ -488,7 +599,11 @@ class Odt2Html(object):
 		self.html_body.insert(0,dlbox)
 
 	#============================================================================
-	#
+	# Create an EPUB file. An EPUB file is a zip file containing:
+	# * The document as one or more XHTML files
+	# * Images
+	# * An XML table of contents
+	# * A few other metadata files
 	#============================================================================
 	def save_epub(self, epub_filename):
 		epub = zipfile.ZipFile(epub_filename, 'w')
@@ -575,7 +690,7 @@ class Odt2Html(object):
 			)
 
 		#---------------------------------------------
-		# Create TOC
+		# Create XML TOC
 		#---------------------------------------------
 		ncx = ET.Element(
 			"{http://www.daisy.org/z3986/2005/ncx/}ncx",
@@ -630,8 +745,13 @@ class Odt2Html(object):
 		#---------------------------------------------
 		# Add CSS stylesheet to archive
 		#---------------------------------------------
+
+		# The base CSS stylesheet for ebook readers. Remember that
+		# this is CSS 2.1, so no @media queries.
 		css = textwrap.dedent("""\
 			HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }
+			BODY { font-size: 12pt }
+			H1, H2, H3, H4, H4 { font-size: inherit }
 			BODY { margin: 0.125in }
 			P { margin: 0 }
 			UL { margin: 0 }
@@ -639,17 +759,24 @@ class Odt2Html(object):
 			TH, TD { vertical-align: top }
 			HR { margin: 0.5in -0.5in 0.5in -0.5in }
 			""")
+
+		# Add the converted styles from the ODT file, again limited to CSS 2.1.
 		css += "\n".join(self.styles.get_css(2.1))
+
+		# We don't need to put the stylesheet in the <head>, we have
+		# a whole zip file to store it in.
 		epub.writestr("stylesheet.css", css.encode("utf-8"), zipfile.ZIP_DEFLATED)
 
 		#---------------------------------------------
-		# Add embedded images to archive
+		# Take the list of images from <img> tags
+		# and copy them from the ODT file to the EPUB
+		# file.
 		#---------------------------------------------
 		for image_filename, image_mimetype, image_compression in self.images:
 			epub.writestr(image_filename, self.odt.open(image_filename).read(), image_compression)
 
 #============================================================================
-#
+# These classes take ODF stylesheets and convert them to CSS stylesheets.
 #============================================================================
 class CssStyle(object):
 	def __init__(self):
@@ -657,6 +784,14 @@ class CssStyle(object):
 		self.media = None
 
 class OdtStyle2Css(object):
+	# Generic font names in ODF are different from those in CSS!
+	font_family_map = {
+		"roman":"serif",
+		"swiss":"sans-serif",
+		"modern":None,
+		"script":"cursive",
+		}
+
 	def __init__(self, debug, keep_unused_styles):
 		self.debug = debug
 		self.keep_unused_styles = keep_unused_styles
@@ -665,14 +800,39 @@ class OdtStyle2Css(object):
 		self.break_before_styles = {}
 		self.style_names = set()
 		self.styles_used = set()
+		self.fonts = {}
 
+	# When you find the <font-face-decls>, pass it to this function.
+	def add_fonts(self, odt_font_face_decls):
+		for font_face in odt_font_face_decls:
+			name = font_face.attrib["name"]
+			font_families = []
+			if "font-family" in font_face.attrib:
+				value = font_face.attrib["font-family"]
+				font_families.append(value)
+			if "font-family-generic" in font_face.attrib:	
+				value = font_face.attrib["font-family-generic"]
+				value = self.font_family_map.get(value, None)
+				if value is not None:
+					font_families.append(value)
+			if "font-pitch" in font_face.attrib:
+				value = font_face.attrib["font-pitch"]
+				if value == "fixed":
+					font_families.append("monospace")
+			if len(font_families) == 0:
+				raise OdtNotImplemented("font not identified")
+			self.fonts[name] = ",".join(font_families)
+
+	# When you find <styles>, pass it to this function.
 	def add_stylesheet(self, odt_stylesheet):
 		if self.debug:
 			print "odt_style:", odt_stylesheet
 		dependent = []
+		# Pass 1
 		for style in list(odt_stylesheet):
 			if not self.add_style(style):
 				dependent.append(style)
+		# Pass 2--Process styles which had unresolved dependencies during pass 1
 		for style in dependent:
 			if not self.add_style(style):
 				raise OdfInvalid("Failed to resolve style: %s %s" % (style.tag, style.attrib))
@@ -684,25 +844,27 @@ class OdtStyle2Css(object):
 		if odt_style.tag == "style":
 			style_name = odt_style.attrib['name']
 			self.style_names.add(style_name)
+			style_family = odt_style.attrib['family']
+
 			css_style = CssStyle()
 
-			if odt_style.attrib['family'] == "text":
+			if style_family == "text":
 				tagname = "SPAN"
-			elif odt_style.attrib['family'] == "paragraph":
+			elif style_family == "paragraph":
 				tagname = ""	# P, H[12345], LI
-			elif odt_style.attrib['family'] == "table":
+			elif style_family == "table":
 				tagname = "TABLE"
-			elif odt_style.attrib['family'] == "table-column":
+			elif style_family == "table-column":
 				tagname = "COL"
-			elif odt_style.attrib['family'] == "table-cell":
+			elif style_family == "table-cell":
 				tagname = "TD"
-			elif odt_style.attrib['family'] == "graphic":
+			elif style_family == "graphic":
 				tagname = "IMG"
-			elif odt_style.attrib['family'] == "section":
+			elif style_family == "section":
 				tagname = "DIV"
 			else:
 				if self.debug:
-					print "    unimplemented style family"
+					print "    unimplemented style family: %s" % style_family
 				return True
 
 			# If this style has a parent, import its attributes.
@@ -711,12 +873,9 @@ class OdtStyle2Css(object):
 					css_style.properties.update(
 						self.css_styles_byselector[(tagname, odt_style.attrib["parent-style-name"])].properties)
 				except KeyError:
-					print "    deferring loading"
+					if self.debug:
+						print "    deferring loading"
 					return False
-
-			# FIXME: read up on this. Does this attribute really indicate a new page?
-			if "master-page-name" in odt_style.attrib and odt_style.attrib["master-page-name"] != "":
-				self.break_before_styles[style_name] = "page"
 
 			# Process the style's children
 			for el in odt_style:
@@ -724,10 +883,10 @@ class OdtStyle2Css(object):
 					print "    %s %s" % (el.tag, odt_style.attrib)
 				if not el.tag.endswith("-properties"):
 					if self.debug:
-						print "      unimplemented style child"
+						print "      unimplemented style child: %s" % el.tag
 					continue
 
-				# Generally applicable to block items
+				# Convert properties which ae generally applicable to block items.
 				for prop in (
 						"margin", "margin-left", "margin-right", "margin-top", "margin-bottom",
 						"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
@@ -739,14 +898,18 @@ class OdtStyle2Css(object):
 							css_style.properties[prop] = clean_dimensions(value)
 
 				if el.tag == "text-properties":
-					for prop in ("font-size", "font-style", "font-weight"):
+					if "font-name" in el.attrib:
+						font_name = el.attrib["font-name"]
+						css_style.properties["font-family"] = self.fonts[font_name]
+
+					for prop in ("font-size", "font-style", "font-weight", "color", "background-color"):
 						if prop in el.attrib:
 							css_style.properties[prop] = el.attrib[prop]
 
 					if "text-position" in el.attrib:
 						m = re.match("^((super)|(sub)|(\d+%))( (\d+%))?$", el.attrib["text-position"])
 						if not m:
-							print "Warning: Invalid text-position: %s" % position
+							raise OdfNotImplemented("unrecognized text position: %s" % el.attrib["text-position"])
 						else:
 							vertical_align = m.group(1)
 							font_scale = m.group(6)
@@ -754,14 +917,14 @@ class OdtStyle2Css(object):
 								if vertical_align == "super" or vertical_align == "sub":
 									font_scale = "60%"
 							if vertical_align == "0%":
-								print "Warning: nested text-position in %s not converted correctly" % style_name
+								print "  Warning: nested text-position in %s not converted correctly" % style_name
 							else:
 								css_style.properties["vertical-align"] = vertical_align
 								if font_scale is not None:
 									css_style.properties["font-size"] = font_scale
 
 				elif el.tag == "paragraph-properties":
-					for prop in ("text-align", "text-indent"):
+					for prop in ("text-align", "text-indent", "background-color"):
 						if prop in el.attrib:
 							css_style.properties[prop] = el.attrib[prop]
 					if "break-before" in el.attrib:
@@ -776,6 +939,8 @@ class OdtStyle2Css(object):
 						if dimension2points(width) > (6.5 * 72.0):
 							width = "100%"
 						css_style.properties["width"] = width
+					else:
+						css_style.properties["width"] = "100%"
 
 				elif el.tag == "table-column-properties":
 					if "column-width" in el.attrib:
@@ -791,6 +956,11 @@ class OdtStyle2Css(object):
 									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
 									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
 
+			# FIXME: read up on this. Does this attribute really indicate a new page?
+			# NOTE: this will override the break-before in <paragraph-properties>
+			if "master-page-name" in odt_style.attrib and odt_style.attrib["master-page-name"] != "":
+				self.break_before_styles[style_name] = "page"
+
 			if self.debug:
 				print "    -->%s.%s" % (tagname, style_name), css_style.properties
 			self.css_styles_byselector[(tagname, style_name)] = css_style
@@ -800,8 +970,8 @@ class OdtStyle2Css(object):
 
 	def mark_used(self, style_name):
 		self.styles_used.add(style_name)
-		if not style_name in self.style_names:
-			print "Warning: style %s used but not defined" % style_name
+		if not style_name in self.style_names and not style_name.startswith("M") and not style_name.startswith("L"):
+			print "  Warning: style %s used but not defined" % style_name
 		return style_name in self.css_styles_byname and len(self.css_styles_byname[style_name].properties) > 0
 
 	def get_break_before(self, style_name):
@@ -834,9 +1004,13 @@ if __name__ == "__main__":
 
 	debug = 0
 	output_format = "html"
+	force = False
 	while len(sys.argv) >= 2 and sys.argv[1].startswith("--"):
 		if sys.argv[1] == "--debug":
 			debug = 1
+			force = True
+		elif sys.argv[1] == "--force":
+			force = True
 		elif sys.argv[1] == "--epub":
 			output_format = "epub"
 		else:
@@ -855,7 +1029,7 @@ if __name__ == "__main__":
 		output_filename = "%s.%s" % (basename, output_format)
 
 		filename_mtime = os.path.getmtime(filename)
-		if debug or not os.path.exists(output_filename) or os.path.getmtime(output_filename) < filename_mtime:
+		if force or not os.path.exists(output_filename) or os.path.getmtime(output_filename) < filename_mtime:
 			print "  rebuilding..."
 	
 			if os.path.exists(output_filename):
@@ -864,7 +1038,7 @@ if __name__ == "__main__":
 			# Perform the conversion
 			try:
 				Odt2Html(filename, output_filename, output_format, debug)
-			except OdfUnimplemented as e:
+			except OdfNotimplemented as e:
 				sys.stderr.write("ODF Feature not implemented: %s\n" % unicode(e))
 				sys.exit(1)
 			except OdfNotSupported as e:
