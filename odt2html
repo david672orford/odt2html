@@ -147,88 +147,6 @@ import re
 import textwrap
 import uuid
 
-# Is this element empty of text and children?
-def element_empty(el):
-	return el.text is None and el.tail is None and len(list(el)) == 0
-
-# Used for error messages
-def element_to_string(el, pretty_print=False):
-	s = ET.tostring(ET.ElementTree(element=el), encoding="utf-8", pretty_print=pretty_print).decode("utf-8")
-	s = re.sub(r' xmlns(:[^=]+)?="[^"]+"', "", s)
-	return s
-
-# Extract text from an ODT element and its children. Throw away
-# any formatting.
-def element_extract_text(el):
-	text = ""
-	if el.text is not None:
-		text += el.text
-	for child_el in el:
-		text += element_extract_text(child_el)
-	if el.tail is not None:
-		text += el.tail
-	return text
-					
-# Convert an href which may have pointed to the ODT file to point
-# to the converted version instead.
-def href_to_html(href):
-	return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
-
-# Take an ODT style-name and replace any characters which
-# are not allowed in a CSS class name.
-def stylename2classname(stylename):
-	return stylename.replace('.','_')
-
-# What does a valid dimension look like?
-dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
-
-# Parse the right-hand side of a CSS style setting, find the numeric
-# dimensions and enforce a minimum size. In the process, all units
-# get converted to points.
-def clean_dimensions(style_arg):
-	global dimensions_re
-	words = []
-	for word in style_arg.split(" "):
-		if dimensions_re.match(word):
-			points = dimension2points(word)
-			if points >= 0.8:
-				word = "%.2fpt" % points
-			else:
-				#word = "1px"
-				word = "thin"
-		words.append(word)
-	return " ".join(words)
-
-# Convert a CSS-style dimension with units into points.
-# We use this when making comparisons.
-def dimension2points(dimension):
-	global dimensions_re
-	m = dimensions_re.match(dimension)
-	if m:
-		if m.group(2) == "pt":
-			return float(m.group(1))
-		elif m.group(2) == "in":
-			return float(m.group(1)) * 72.0
-		elif m.group(2) == "mm":
-			return float(m.group(1)) * 72.0 / 25.4
-		elif m.group(2) == "cm":
-			return float(m.group(1)) * 72.0 / 2.54
-		elif m.group(2) == "px":
-			return float(m.group(1)) * 0.72			# about 100 DPI
-	raise OdfNotImplementedYet("dimension not understood: %s" % dimension)
-
-# We don't have this case covered
-class OdfNotImplementedYet(Exception):
-	pass
-
-# We know abou this case and do not play to support it
-class OdfNotSupported(Exception):
-	pass
-
-# The input file looks corrupt
-class OdfInvalid(Exception):
-	pass
-
 #============================================================================
 # ODT to HTML Converter
 #============================================================================
@@ -950,6 +868,27 @@ class Odt2Html(object):
 				data = self.odt.open(image_filename).read()
 			epub.writestr(image_filename, data, image_compression)
 
+# Is this element empty of text and children?
+def element_empty(el):
+	return el.text is None and el.tail is None and len(list(el)) == 0
+
+# Extract text from an ODT element and its children. Throw away
+# any formatting.
+def element_extract_text(el):
+	text = ""
+	if el.text is not None:
+		text += el.text
+	for child_el in el:
+		text += element_extract_text(child_el)
+	if el.tail is not None:
+		text += el.tail
+	return text
+					
+# Convert an href which may have pointed to the ODT file to point
+# to the converted version instead.
+def href_to_html(href):
+	return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
+
 #============================================================================
 # These classes take ODF stylesheets and convert them to CSS stylesheets.
 #============================================================================
@@ -1206,6 +1145,68 @@ class OdtStyle2Css(object):
 
 		return css
 
+# What does a valid dimension look like?
+dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
+
+# Parse the right-hand side of a CSS style setting, find the numeric
+# dimensions and enforce a minimum size. In the process, all units
+# get converted to points.
+def clean_dimensions(style_arg):
+	global dimensions_re
+	words = []
+	for word in style_arg.split(" "):
+		if dimensions_re.match(word):
+			points = dimension2points(word)
+			if points >= 0.8:
+				word = "%.2fpt" % points
+			else:
+				#word = "1px"
+				word = "thin"
+		words.append(word)
+	return " ".join(words)
+
+# Convert a CSS-style dimension with units into points.
+# We use this when making comparisons.
+def dimension2points(dimension):
+	global dimensions_re
+	m = dimensions_re.match(dimension)
+	if m:
+		if m.group(2) == "pt":
+			return float(m.group(1))
+		elif m.group(2) == "in":
+			return float(m.group(1)) * 72.0
+		elif m.group(2) == "mm":
+			return float(m.group(1)) * 72.0 / 25.4
+		elif m.group(2) == "cm":
+			return float(m.group(1)) * 72.0 / 2.54
+		elif m.group(2) == "px":
+			return float(m.group(1)) * 0.72			# about 100 DPI
+	raise OdfNotImplementedYet("dimension not understood: %s" % dimension)
+
+#============================================================================
+# General Utility Functions
+#============================================================================
+
+# Take an ODT style-name and replace any characters which
+# are not allowed in a CSS class name.
+def stylename2classname(stylename):
+	return stylename.replace('.','_')
+
+# We don't have this case covered
+class OdfNotImplementedYet(Exception):
+	pass
+
+# We know abou this case and do not play to support it
+class OdfNotSupported(Exception):
+	pass
+
+# The input file looks corrupt
+class OdfInvalid(Exception):
+	pass
+
+#============================================================================
+# Main
+#============================================================================
 if __name__ == "__main__":
 	import codecs
 	sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
