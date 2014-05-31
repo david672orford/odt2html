@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 18 April 2014
+# Last modified: 23 April 2014
 #
 # == Opendocument ==
 # * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
@@ -26,11 +26,31 @@ import lxml.etree as ET
 from lxml.builder import E
 import urllib
 import re
+import textwrap
+import uuid
 
 # Is this element empty of text and children?
 def element_empty(el):
 	return el.text is None and el.tail is None and len(list(el)) == 0
 
+# Used for error messages
+def element_to_string(el, pretty_print=False):
+	s = ET.tostring(ET.ElementTree(element=el), encoding="utf-8", pretty_print=pretty_print).decode("utf-8")
+	s = re.sub(r' xmlns(:[^=]+)?="[^"]+"', "", s)
+	return s
+
+# Extract text from an ODT element and its children. Throw away
+# any formatting.
+def element_extract_text(el):
+	text = ""
+	if el.text is not None:
+		text += el.text
+	for child_el in el:
+		text += element_extract_text(child_el)
+	if el.tail is not None:
+		text += el.tail
+	return text
+					
 # Take an ODT style-name and replace any characters which
 # are not allowed in a CSS class name.
 def stylename2classname(stylename):
@@ -72,24 +92,62 @@ def dimension2points(dimension):
 			return float(m.group(1)) * 72.0 / 2.54
 		elif m.group(2) == "px":
 			return float(m.group(1)) * 0.72			# about 100 DPI
-	raise Exception("Invalid dimension: %s" % dimension)
+	raise OdfUnimplemented("dimension not understood: %s" % dimension)
 
+class OdfUnimplemented(Exception):
+	pass
+
+class OdfNotSupported(Exception):
+	pass
+
+class OdfInvalid(Exception):
+	pass
+
+#============================================================================
+# ODT to HTML Converter
+#============================================================================
 class Odt2Html(object):
-	def __init__(self, odt_filename, html_filename, debug):
+	def __init__(self, odt_filename, output_filename, output_format, debug):
 		self.odt_filename = odt_filename
 		self.keep_unused_styles = False
+		self.use_data_urls = True
+		self.keep_toc = True
 		self.debug = debug
-		self.depth = 0
 
+		self.depth = 0				# recursion level
+		self.subdoc_count = 0		# in master document, which subdocument
+		self.subdocs = {}			# in master document, list of subdocuments
+		self.title = ""				# document title
+		self.h1s = []				# level 1 headings
+		self.h1s_bytext = {}
+		self.images = []			# images to include in .epub file
+
+		if output_format == "html":
+			self.load_and_convert()
+			self.add_dlbox()
+			self.save_html(output_filename)
+		elif output_format == "epub":
+			self.use_data_urls = False
+			self.keep_toc = False
+			self.load_and_convert()
+			self.save_epub(output_filename)
+		else:
+			raise Exception
+
+	#============================================================================
+	# Load styles.xml into an OdtStyle2Css object
+	#============================================================================
+	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
-		self.odt = zipfile.ZipFile(odt_filename)
+		self.odt = zipfile.ZipFile(self.odt_filename)
 		if self.debug:
 			for resource_filename in self.odt.namelist():
 				print "  %s" % resource_filename
 
-		# Load the styles and document text
+		# Uncompress and parse the XML streams which we need.
 		styles_xml = self.load_xml("styles.xml")
 		content_xml = self.load_xml("content.xml")
+		meta_xml = self.load_xml("meta.xml")
 
 		# Parse the styles from styles.xml and content.xml
 		self.styles = OdtStyle2Css(self.debug, self.keep_unused_styles)
@@ -100,36 +158,36 @@ class Odt2Html(object):
 			):
 			self.styles.add_stylesheet(stylesheet)
 
-		# Create HTML HEAD and BODY objects into which we can start
+		# Create HTML objects into which we can start
 		# to insert objects to represent the output document
 		self.html_head = E.head()
+		self.html_head.append(E.meta({"http-equiv":"content-type","content":"text/html; charset=utf-8"}))
 		self.html_body = E.body()
-		self.html_head.append(E.meta({"charset":"utf-8"}))
-		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
+		self.html = E.html(self.html_head, self.html_body)
+		self.html_elementtree = ET.ElementTree(element=self.html)
 
-		# Add links to top right
-		dlbox = E.div()
-		self.html_body.append(dlbox)
-		dlbox.attrib["id"] = "dlbox"
-		basename = os.path.splitext(os.path.basename(odt_filename))[0]
-		dlbox.append(E.a(u"Print PDF", {	# <-- space in non-breaking
-			"title":"Download this page as a PDF file for high-quality printing",
-			"href":"%s.pdf" % basename,
-			"type":"application/pdf"
-			}))
-		dlbox.append(E.a(u"Edit ODT", {		# <-- space is non-breaking
-			"title":"Download this page as an Opendocument word processing file",
-			"href":"%s.odt" % basename,
-			"type":"application/vnd.oasis.opendocument.text"
-			}))
-		dlbox[0].tail = ""		# supress newline after first </a> when pretty_print==True
+		# Search for the title of the document
+		titles = meta_xml.xpath("/document-meta/meta/title")
+		if len(titles) > 0:
+			self.title = titles[0].text
+		else:
+			headings = content_xml.xpath("/document-content/body/text/h")
+			if len(headings) > 0:
+				self.title = headings[0].text
+		self.html_head.append(E.title(self.title))
 
-		# Start the conversion
-		for odt_body in content_xml.xpath("/document-content/body/text"):
-			for odt_el in odt_body:
-				self.convert_element(odt_el, self.html_body)
+		# Locate ODT document body
+		odt_body = content_xml.xpath("/document-content/body/text")[0]
 
-		# Convert the footer
+		# Do first pass
+		for odt_el in odt_body:
+			self.scan_element(odt_el)
+
+		# Convert the document and append it to the HTML body
+		for odt_el in odt_body:
+			self.convert_element(odt_el, self.html_body)
+
+		# Convert the footer and add it to the body
 		odt_footer = styles_xml.xpath("/document-styles/master-styles/master-page[@name='Standard']/footer/p")
 		#print "footer:", odt_footer
 		if len(odt_footer) >= 1:
@@ -137,18 +195,9 @@ class Odt2Html(object):
 			self.convert_element(odt_footer[0], html_footer)
 			self.html_body.append(html_footer)
 
-		# Convert the styles to CSS and insert it them into the head of the document.
-		style = E.style({"type": "text/css"})
-		style.text = re.sub(r"^", r"      ", self.styles.get_css(), flags=re.MULTILINE) + "\n    "
-		self.html_head.append(style)
-
-		# Write the HTML tree to a file
-		outfh = open(html_filename, "w")
-		outfh.write("<!DOCTYPE HTML>\n")
-		html = E.html(self.html_head, self.html_body)
-		ET.ElementTree(element=html).write(outfh, encoding="utf-8", pretty_print=True)
-
+	#============================================================================
 	# Load one of the XML files embedded in the ODT file
+	#============================================================================
 	def load_xml(self, filename):
 		if self.debug:	
 			print "===== %s =====" % filename
@@ -169,17 +218,60 @@ class Odt2Html(object):
 
 		return tree
 
+	#============================================================================
+	# Pass 1
+	#============================================================================
+	def scan_element(self, odt_el):
+		# Collect the source file names of the sections of a master document
+		if odt_el.tag == "section":
+			if odt_el.attrib.get("protected","false") == "true":
+				section_sources = odt_el.xpath("./section-source")
+				subdoc_href = section_sources[0].attrib['href']
+				subdoc_href = re.sub(r'\.odt$', '.html', subdoc_href, flags=re.IGNORECASE)
+				self.subdoc_count += 1
+				subdoc_id = "subdoc%d" % self.subdoc_count
+				print subdoc_href, subdoc_id
+				self.subdocs[subdoc_href] = subdoc_id
+
+		# Collect the names of the level 1 headings and assign them ID's
+		elif odt_el.tag == "h":
+			level = int(odt_el.attrib['outline-level'])
+			if level == 1:
+				h_id = "subh%d" % (len(self.h1s) + 1)
+				h_text = element_extract_text(odt_el)
+				self.h1s.append((h_id, h_text))
+				self.h1s_bytext[h_text] = h_id
+
+		for child_el in odt_el:
+			self.scan_element(child_el)
+
+	#============================================================================
 	# This function converts an ODT element to HTML and adds it to the
 	# parent HTML element specified. It then calls itself on each child
 	# of the ODT element with the newly created HTML element as the 
 	# target parent.
+	#============================================================================
 	def convert_element(self, odt_el, html_parent_el):
+		convert_children = True
+
 		if odt_el.tag == "sequence-decls":		# mystery
 			html_el = None
 		elif odt_el.tag == "h":
-			html_el = E("h%d" % int(odt_el.attrib['outline-level']))
+			level = int(odt_el.attrib['outline-level'])
+			html_el = E("h%d" % level)
+			if level == 1:	# level 1 headings have ID's
+				h_text = element_extract_text(odt_el)
+				h_id = self.h1s_bytext[h_text]
+				html_el.attrib['id'] = h_id
 		elif odt_el.tag == "section":
 			html_el = E.div()
+			# If this is a section of a master document,
+			if odt_el.attrib.get("protected","false") == "true":
+				section_sources = odt_el.xpath("./section-source")
+				subdoc_href = section_sources[0].attrib['href']
+				subdoc_href = re.sub(r'\.odt$', '.html', subdoc_href, flags=re.IGNORECASE)
+				subdoc_id = self.subdocs[subdoc_href]
+				html_el.attrib['id'] = subdoc_id
 		elif odt_el.tag == "p":					# paragraph
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
@@ -199,15 +291,22 @@ class Odt2Html(object):
 			elif href.startswith("../"):
 				# Note: the starting directory for such relative hrefs
 				# is apparently the root of the zip file.
-				href = href[3:]
-				fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href))
-				#print "  fs_path:", fs_path
-				if os.path.exists(fs_path):
-					print "  href: %s" % fs_path
+				if href in self.subdocs:
+					href = "#%s" % self.subdocs[href]
 				else:
-					print "  Warning: broken link: %s" % fs_path
+					href = href[3:]
+					fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href))
+					if os.path.exists(fs_path):
+						print "  href: %s" % fs_path
+					else:
+						print "  Warning: broken link: %s" % fs_path
+			elif href.startswith("#"):
+				if href.startswith("#__RefHeading__"):
+					convert_children = False		# drop <tab/>Pagenum
+					# ValueError here means that the index is out-of-date
+					href = "#%s" % self.h1s_bytext[odt_el.text]
 			else:
-				print "  Warning: Inappropriate href: %s" % href
+				print "  Warning: href of inappropriate type: %s" % href
 			html_el = E.a({"href":href})
 			html_el.tail = ""
 		elif odt_el.tag == "line-break":
@@ -249,11 +348,17 @@ class Odt2Html(object):
 		elif odt_el.tag == "frame":
 			html_el = self.convert_frame(odt_el)
 			html_el.attrib['style'] = "max-width:%s;max-height:%s" % (odt_el.attrib['height'], odt_el.attrib['height'])
-			#html_parent_el.append(html_el)
-			#html_el = None
+			convert_children = False
 		elif odt_el.tag == "page-number":
 			html_el = ET.Comment("page number")
 			html_parent_el.append(html_el)
+			html_el = None
+		elif odt_el.tag == "table-of-content":
+			if self.keep_toc:
+				html_el = E.div({"id":"toc"})
+			else:
+				html_el = None
+		elif odt_el.tag == "table-of-content-source":
 			html_el = None
 		else:									# unimplemented but not supressed
 			html_el = E.span()
@@ -269,36 +374,39 @@ class Odt2Html(object):
 				if self.styles.mark_used(style_name) or self.keep_unused_styles:
 					html_el.attrib['class'] = stylename2classname(style_name)
 				if self.styles.get_break_before(style_name) == "page":
-					self.html_body.append(E.hr())
+					if len(self.html_body) > 0:
+						self.html_body.append(E.hr())
 
-			# Run through the children collapsing the uncessary spans
-			# which Openoffice sometimes generates for no appearent reason.
-			collapsed_children = []
-			prev_el = None
-			for el in odt_el:
-				if prev_el is not None \
-						and el.tag == "span" and prev_el.tag == "span" \
-						and el.attrib == prev_el.attrib \
-						and prev_el.tail is None \
-						and prev_el.text is not None:
-					#print "collapsed"
-					prev_el.text += el.text
-					if el.tail is not None:
-						prev_el.tail = el.tail
-				else:
-					collapsed_children.append(el)
-					prev_el = el
+			if convert_children:
+				# Run through the children collapsing the unnecessary spans
+				# which Openoffice sometimes generates for no appearent reason.
+				collapsed_children = []
+				prev_el = None
+				for el in odt_el:
+					if prev_el is not None \
+							and el.tag == "span" and prev_el.tag == "span" \
+							and el.attrib == prev_el.attrib \
+							and prev_el.tail is None \
+							and prev_el.text is not None:
+						#print "collapsed"
+						prev_el.text += el.text
+						if el.tail is not None:
+							prev_el.tail = el.tail
+					else:
+						collapsed_children.append(el)
+						prev_el = el
+	
+				# convert the children
+				for el in collapsed_children:
+					self.depth += 1
+					self.convert_element(el, html_el)
+					self.depth -= 1
 
-			# convert the children
-			for el in collapsed_children:
-				self.depth += 1
-				self.convert_element(el, html_el)
-				self.depth -= 1
-
-			# Change truly empty <P> tags to <BR> tags because in HTML 4 empty
-			# <P> tags are supposed to be ignored.
+			# If a <P> tag is completely empty, put a <BR> tag in it because
+			# in HTML 4 empty <P> tags are supposed to be ignored.
 			if odt_el.tag == "p" and element_empty(html_el):
-				html_el = E.br()
+				#html_el = E.br()
+				html_el.append(E.br())
 
 			if html_el != html_parent_el:
 				html_parent_el.append(html_el)
@@ -309,16 +417,240 @@ class Odt2Html(object):
 
 		if href.endswith(".png"):
 			mimetype = "image/png"
+			compression = zipfile.ZIP_STORED
 		elif href.endswith(".svg"):
 			mimetype = "image/svg+xml;utf8"
+			compression = zipfile.ZIP_DEFLATED
 		else:
-			raise Exception
+			raise OdfNotImplemented("Href extension not recognized: %s" % href)
 
-		img = E.img()
-		data = urllib.quote(self.odt.open(href, "r").read().encode("base64"))
-		img.attrib['src'] = "data:%s;base64,%s" % (mimetype, data)
+		# http://www.websiteoptimization.com/speed/tweak/inline-images/
+		img = E.img({"alt":""})
+		if self.use_data_urls:
+			img_data = self.odt.open(href, "r").read()
+			img.attrib['src'] = "data:%s;base64,%s" % (mimetype, urllib.quote(img_data.encode("base64")))
+		else:
+			img.attrib['src'] = href
+			self.images.append((href, mimetype, compression))
 		return img
 
+	#============================================================================
+	# Take the HTML BODY object in RAM, wrap it in an HTML element,
+	# added a HEAD, and write it out to disk.
+	#============================================================================
+	def save_html(self, html_filename):
+		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
+
+		css = textwrap.dedent("""\
+			HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }
+			BODY { margin: 0.375in 0.125in 0.375in 0.125in }
+			@media (min-width: 8.5in) { BODY { margin: 0.5in } }
+			P { margin: 0 }
+			UL { margin: 0 }
+			TABLE { border-collapse: collapse }
+			TH, TD { vertical-align: top }
+			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }
+			DIV#dlbox A { display: inline-block; width: 50pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }
+			@media print { DIV#dlbox: display: none }
+			DIV.footer { margin-top: 0.5in; font-size: 8pt }
+			""")
+		css += "\n".join(self.styles.get_css(3.0))
+
+		# Insert the CSS styles into the head of the document.
+		style = E.style({"type": "text/css"})
+		style.text = "\n" + re.sub(r"^", r"      ", css, flags=re.MULTILINE) + "\n    "
+		self.html_head.append(style)
+
+		# Write the HTML tree to a file
+		outfh = open(html_filename, "w")
+		outfh.write("<!DOCTYPE HTML>\n")
+		self.html_elementtree.write(outfh, encoding="utf-8", pretty_print=True)
+
+	# Add a box to the top-rigth corner of the document with links
+	# to the PDF and ODT versions of this document.
+	def add_dlbox(self):
+		# Add links to top right
+		dlbox = E.div()
+		dlbox.attrib["id"] = "dlbox"
+		basename = os.path.splitext(os.path.basename(self.odt_filename))[0]
+		dlbox.append(E.a(u"Print PDF", {	# <-- space in non-breaking
+			"title":"Download this page as a PDF file for high-quality printing",
+			"href":"%s.pdf" % basename,
+			"type":"application/pdf"
+			}))
+		dlbox.append(E.a(u"Edit ODT", {		# <-- space is non-breaking
+			"title":"Download this page as an Opendocument word processing file",
+			"href":"%s.odt" % basename,
+			"type":"application/vnd.oasis.opendocument.text"
+			}))
+		dlbox[0].tail = ""		# supress newline after first </a> when pretty_print==True
+		self.html_body.insert(0,dlbox)
+
+	#============================================================================
+	#
+	#============================================================================
+	def save_epub(self, epub_filename):
+		epub = zipfile.ZipFile(epub_filename, 'w')
+		epub_uuid = uuid.uuid4().urn
+
+		# MIME type must be first in file and uncompressed
+		epub.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+
+		# Boilerplate
+		epub.writestr("META-INF/container.xml", textwrap.dedent("""\
+			<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+				<rootfiles>
+					<rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+				</rootfiles>
+			</container>
+			"""), zipfile.ZIP_DEFLATED)
+
+		#---------------------------------------------
+		# Create Content Index and add to archive
+		#---------------------------------------------
+		index_tpl = ET.Element(
+			"{http://www.idpf.org/2007/opf}package",
+			{	"version": "2.0",
+				"unique-identifier": "bookid",
+				},
+			nsmap = {
+				None:"http://www.idpf.org/2007/opf",
+				"dc":"http://purl.org/dc/elements/1.1/"
+				},
+			)
+
+		metadata = E.metadata()
+		index_tpl.append(metadata)
+
+		manifest = E.manifest()
+		index_tpl.append(manifest)
+
+		spine = E.spine({"toc":"ncx"})
+		index_tpl.append(spine)
+
+		# Add metadata
+		metadata.append(E("{http://purl.org/dc/elements/1.1/}title",self.title))
+		metadata.append(E("{http://purl.org/dc/elements/1.1/}identifier",epub_uuid,{"id":"bookid"}))
+		metadata.append(E("{http://purl.org/dc/elements/1.1/}language","en-US"))
+
+		# Add single document file
+		manifest.append(E.item({
+			"id":"content",
+			"href":"content.html",		# path is relative to content.opf
+			"media-type":"application/xhtml+xml",
+			}))
+		spine.append(E.itemref({
+			"idref":"content"
+			}))
+
+		# Add CSS stylesheet to manifest (we will add it to the archive later)
+		manifest.append(E.item({
+			"id":"css",
+			"href":"stylesheet.css",
+			"media-type":"text/css",
+			}))
+
+		# Add Table of Contents to the manifest
+		manifest.append(E.item({
+			"id":"ncx",
+			"href":"toc.ncx",
+			"media-type":"application/x-dtbncx+xml",
+			}))
+
+		# Add embedded images to manifest (we will add them to the archive later)
+		i = 1
+		for image_filename, image_mimetype, image_compression in self.images:
+			manifest.append(E.item({
+				"id":"img-%d" % i,
+				"href":image_filename,
+				"media-type":image_mimetype,
+				}))
+			i += 1
+			
+		# Add content index file to archive
+		epub.writestr("content.opf",
+			ET.tostring(ET.ElementTree(element=index_tpl), encoding="utf-8", pretty_print=True),
+			zipfile.ZIP_DEFLATED
+			)
+
+		#---------------------------------------------
+		# Create TOC
+		#---------------------------------------------
+		ncx = ET.Element(
+			"{http://www.daisy.org/z3986/2005/ncx/}ncx",
+			{	"version": "2005-1",
+				},
+			nsmap = {
+				None:"http://www.daisy.org/z3986/2005/ncx/",
+				},
+			)
+
+		ncx_head = E.head()
+		ncx.append(ncx_head)
+		ncx_head.append(E.meta({"name":"dtb:uid","content":epub_uuid}))
+		ncx_head.append(E.meta({"name":"dtb:depth","content":"1"}))
+		ncx_head.append(E.meta({"name":"dtb:totalPageCount","content":"0"}))
+		ncx_head.append(E.meta({"name":"dtb:maxPageNumber","content":"0"}))
+
+		ncx.append(E.docTitle(E.text(self.title)))
+
+		ncx_navmap = E.navMap()
+		ncx.append(ncx_navmap)
+
+		i = 1
+		for h_id, h_text in self.h1s:
+			print "  H1:", h_id, h_text
+			ncx_navmap.append(
+				E.navPoint(
+					E.navLabel(E.text(h_text)),
+					E.content({"src":"content.html#%s" % h_id}),
+					{	"id":"navpoint-%d" % i,
+						"playOrder":"%d" % i
+						},
+					),
+				)
+			i += 1
+
+		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
+			+ '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n' \
+			+ ET.tostring(ET.ElementTree(element=ncx), encoding="utf-8", pretty_print=True)
+		epub.writestr("toc.ncx", text, zipfile.ZIP_DEFLATED)
+
+		#---------------------------------------------
+		# Add HTML file to archive
+		#---------------------------------------------
+		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
+		self.html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
+		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
+			+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
+			+ ET.tostring(self.html_elementtree, encoding="utf-8", pretty_print=True)
+		epub.writestr("content.html", text, zipfile.ZIP_DEFLATED)
+
+		#---------------------------------------------
+		# Add CSS stylesheet to archive
+		#---------------------------------------------
+		css = textwrap.dedent("""\
+			HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }
+			BODY { margin: 0.125in }
+			P { margin: 0 }
+			UL { margin: 0 }
+			TABLE { border-collapse: collapse }
+			TH, TD { vertical-align: top }
+			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			""")
+		css += "\n".join(self.styles.get_css(2.1))
+		epub.writestr("stylesheet.css", css.encode("utf-8"), zipfile.ZIP_DEFLATED)
+
+		#---------------------------------------------
+		# Add embedded images to archive
+		#---------------------------------------------
+		for image_filename, image_mimetype, image_compression in self.images:
+			epub.writestr(image_filename, self.odt.open(image_filename).read(), image_compression)
+
+#============================================================================
+#
+#============================================================================
 class CssStyle(object):
 	def __init__(self):
 		self.properties = {}
@@ -343,7 +675,7 @@ class OdtStyle2Css(object):
 				dependent.append(style)
 		for style in dependent:
 			if not self.add_style(style):
-				raise Exception("Failed to resolve style: %s %s" % (style.tag, style.attrib))
+				raise OdfInvalid("Failed to resolve style: %s %s" % (style.tag, style.attrib))
 
 	# Take an ODF style tag and its children and convert them to CSS
 	def add_style(self, odt_style):
@@ -475,26 +807,9 @@ class OdtStyle2Css(object):
 	def get_break_before(self, style_name):
 		return self.break_before_styles.get(style_name, None)
 
-	def get_css(self):
+	def get_css(self, css_version):
 		css = []
 
-		# Something to start with
-		css.append("HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }")
-		css.append("BODY { margin: 0.375in 0.125in 0.375in 0.125in }")			# small screens
-		css.append("@media (min-width: 8.5in) { BODY { margin: 0.5in } }")		# large screens
-		css.append("P { margin: 0 }")
-		css.append("UL { margin: 0 }")
-		css.append("TABLE { border-collapse: collapse }")
-		css.append("TH, TD { vertical-align: top }")
-		css.append("HR { margin: 0.5in -0.5in 0.5in -0.5in }")
-
-		# Download Box
-		css.append("DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }")
-		css.append("DIV#dlbox A { display: inline-block; width: 50pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }")
-		css.append("@media print { DIV#dlbox: display: none }")
-		css.append("DIV.footer { margin-top: 0.5in; font-size: 8pt }")
-
-		# The Converted Rules
 		for selector, css_style in self.css_styles_byselector.items():
 			(tagname, stylename) = selector
 			if self.keep_unused_styles or (len(css_style.properties) > 0 and stylename in self.styles_used):
@@ -503,23 +818,30 @@ class OdtStyle2Css(object):
 					stylename2classname(stylename),
 					";".join(["%s:%s" % (name, value) for name, value in css_style.properties.items()])
 					)
-				if css_style.media is not None:
+				if css_style.media is not None and css_version >= 3.0:
 					style_text = "@media %s { %s }" % (
 						css_style.media,
 						style_text
 						)
 				css.append(style_text)
 
-		# Convert to indented text/css
-		return "\n".join(css)
+		return css
 
 if __name__ == "__main__":
 	import codecs
 	sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
+	sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
 
 	debug = 0
-	if len(sys.argv) >= 2 and sys.argv[1] == '--debug':
-		debug = 1
+	output_format = "html"
+	while len(sys.argv) >= 2 and sys.argv[1].startswith("--"):
+		if sys.argv[1] == "--debug":
+			debug = 1
+		elif sys.argv[1] == "--epub":
+			output_format = "epub"
+		else:
+			sys.stderr.write("Unrecognized option: %s\n" % sys.argv[1])
+			sys.exit(1)
 		sys.argv.pop(1)
 
 	for filename in sys.argv[1:]:
@@ -530,21 +852,31 @@ if __name__ == "__main__":
 		if ext != ".odt":
 			sys.stderr.write("Not an ODT file.\n")
 			sys.exit(1)
-		filename_output = "%s.html" % basename
+		output_filename = "%s.%s" % (basename, output_format)
 
 		filename_mtime = os.path.getmtime(filename)
-		if debug or not os.path.exists(filename_output) or os.path.getmtime(filename_output) < filename_mtime:
+		if debug or not os.path.exists(output_filename) or os.path.getmtime(output_filename) < filename_mtime:
 			print "  rebuilding..."
 	
-			if os.path.exists(filename_output):
-				os.unlink(filename_output)
+			if os.path.exists(output_filename):
+				os.unlink(output_filename)
 
 			# Perform the conversion
-			Odt2Html(filename, filename_output, debug)
+			try:
+				Odt2Html(filename, output_filename, output_format, debug)
+			except OdfUnimplemented as e:
+				sys.stderr.write("ODF Feature not implemented: %s\n" % unicode(e))
+				sys.exit(1)
+			except OdfNotSupported as e:
+				sys.stderr.write("Change unsupported formatting: %s\n" % unicode(e))
+				sys.exit(1)
+			except OdfInvalid as e:
+				sys.stderr.write("ODT file is invalid: %s\n" % unicode(e))
+				sys.exit(1)
 
 			# Make the creation time of the HTML file one millisecond after the
 			# creation time of the ODT file from which it was made.
-			os.utime(filename_output, (filename_mtime + 0.01, filename_mtime + 0.01))
+			os.utime(output_filename, (filename_mtime + 0.01, filename_mtime + 0.01))
 		else:
 			print "    up-to-date"
 
