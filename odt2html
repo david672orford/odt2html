@@ -206,7 +206,7 @@ class Odt2Html(object):
 			self.opts.use_data_urls = False
 			self.opts.keep_toc = False
 			self.opts.split_by_sections = True
-			self.opts.svg2png = True
+			#self.opts.svg2png = True
 			self.load_and_convert()
 			self.save_epub(output_filename)
 		else:
@@ -334,53 +334,23 @@ class Odt2Html(object):
 		return tree
 
 	#============================================================================
-	# Load and strip an SVG file
+	# Image handling
 	#============================================================================
-	def load_svg(self, filename, pretty_print=True):
-		if self.opts.svg2png:
-			import cairo
-			import rsvg
-			import StringIO
 
-			svg = rsvg.Handle()
-			svg.write(self.odt.open(filename).read())
-			svg.close()
-			width, height = svg.get_dimension_data()[:2]
+	# Request the addition of an image to the output document.
+	# Returns either a data: URL or the path which the image
+	# will occupy in the output file tree.
+	def add_image(self, filename):
+		image = Odt2HtmlImage(self.odt, filename, self.opts.svg2png)
 
-			surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-			ctx = cairo.Context(surface)
-			svg.render_cairo(ctx)
-
-			out_fh = StringIO.StringIO()
-			surface.write_to_png(out_fh)
-
-			filename = "%s.png" % filename		# ".svg.png"
-
-			return (filename, "image/png", out_fh.getvalue())
-
+		if self.opts.use_data_urls:
+			# http://www.websiteoptimization.com/speed/tweak/inline-images/
+			image_data = image.get_data(pretty_print=False)
+			print "  Data URL for %s: %d bytes" % (image.filename, len(image_data))
+			return "data:%s;base64,%s" % (image.mimetype, urllib.quote(image_data.encode("base64")))
 		else:
-			tree = ET.parse(self.odt.open(filename))
-			for el in list(tree.iter()):
-				self.prune_svg(el)
-			# FIXME: may be able to use encoding="unicode" here and drop the decode()
-			return (filename, "image/svg+xml", ET.tostring(tree, pretty_print=pretty_print, encoding="utf-8").decode("utf-8"))
-
-	def prune_svg(self, element):
-		for key in element.attrib.keys():
-			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
-				del element.attrib[key]
-			elif key.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
-				del element.attrib[key]
-		for child in list(element):
-			#print child.tag
-			if child.tag.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
-				element.remove(child)
-			elif child.tag.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
-				element.remove(child)
-			elif child.tag.startswith("{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"):
-				element.remove(child)
-			else:
-				self.prune_svg(child)
+			self.images.append(image)
+			return image.filename
 
 	#============================================================================
 	# Pass 1
@@ -672,34 +642,8 @@ class Odt2Html(object):
 	def convert_frame(self, odt_frame):
 		odt_image = odt_frame.xpath("./image")[0]
 		href = odt_image.attrib['href']
-
-		if href.endswith(".png"):
-			mimetype = "image/png"
-			compression = zipfile.ZIP_STORED
-		elif href.endswith(".gif"):
-			mimetype = "image/gif"
-			compression = zipfile.ZIP_STORED
-		elif href.endswith(".jpg"):
-			mimetype = "image/jpeg"
-			compression = zipfile.ZIP_STORED
-		elif href.endswith(".svg"):
-			mimetype = "image/svg+xml"
-			compression = zipfile.ZIP_DEFLATED
-		else:
-			raise OdfNotImplemented("Href extension not recognized: %s" % href)
-
-		# http://www.websiteoptimization.com/speed/tweak/inline-images/
 		img = E.img({"alt":""})		# required for XHTML to validate
-		if self.opts.use_data_urls:
-			if mimetype == "image/svg+xml":
-				href, mimetype, img_data = self.load_svg(href, pretty_print=False)
-			else:
-				img_data = self.odt.open(href, "r").read()
-			print "  Data URL for %s: %d bytes" % (href, len(img_data))
-			img.attrib['src'] = "data:%s;base64,%s" % (mimetype, urllib.quote(img_data.encode("base64")))
-		else:
-			img.attrib['src'] = href
-			self.images.append((href, mimetype, compression))
+		img.attrib["src"] = self.add_image(href)
 		return img
 
 	#============================================================================
@@ -871,20 +815,15 @@ class Odt2Html(object):
 		# the manifest
 		#---------------------------------------------
 		i = 1
-		for image_filename, image_mimetype, image_compression in self.images:
+		for image in self.images:
 			i += 1
-
-			if image_mimetype == "image/svg+xml":
-				image_filename, image_mimetype, data = self.load_svg(image_filename)
-			else:
-				data = self.odt.open(image_filename).read()
-			epub.writestr(image_filename, data, image_compression)
-
 			manifest.append(E.item({
 				"id":"img-%d" % i,
-				"href":image_filename,
-				"media-type":image_mimetype,
+				"href":image.filename,
+				"media-type":image.mimetype,
 				}))
+
+			epub.writestr(image.filename, image.get_data(), image.compression)
 
 		#---------------------------------------------
 		# Zip content index and table of contents
@@ -1307,6 +1246,78 @@ class OdtStyle2Css(object):
 			elif m.group(2) == "px":
 				return float(m.group(1)) * 0.72			# about 100 DPI
 		raise OdfNotImplementedYet("dimension not understood: %s" % dimension)
+
+#============================================================================
+# Images
+#============================================================================
+class Odt2HtmlImage(object):
+	def __init__(self, odt, filename, svg2png):
+		self.odt = odt
+		self.filename = filename
+		self.svg2png = svg2png
+
+		if self.filename.endswith(".png"):
+			self.mimetype = "image/png"
+			self.compression = zipfile.ZIP_STORED
+		elif self.filename.endswith(".gif"):
+			self.mimetype = "image/gif"
+			self.compression = zipfile.ZIP_STORED
+		elif self.filename.endswith(".jpg"):
+			self.mimetype = "image/jpeg"
+			self.compression = zipfile.ZIP_STORED
+		elif self.filename.endswith(".svg"):
+			self.mimetype = "image/svg+xml"
+			self.compression = zipfile.ZIP_DEFLATED
+		else:
+			raise OdfNotImplemented("Href extension not recognized: %s" % self.filename)
+
+		self.original_filename = self.filename
+		self.original_mimetype = self.mimetype
+
+		if self.mimetype == "image/svg+xml" and self.svg2png:
+			self.filename = "%s.png" % self.filename
+			self.mimetype = "image/png"
+			self.compression = zipfile.ZIP_STORED
+
+	def get_data(self, pretty_print=True):
+		if self.original_mimetype == "image/svg+xml":
+			if self.svg2png:
+				import cairo
+				import rsvg
+				import StringIO
+				svg = rsvg.Handle()
+				svg.write(self.odt.open(self.original_filename).read())
+				svg.close()
+				width, height = svg.get_dimension_data()[:2]
+				surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+				svg.render_cairo(cairo.Context(surface))
+				out_fh = StringIO.StringIO()
+				surface.write_to_png(out_fh)
+				return out_fh.getvalue()
+			else:
+				tree = ET.parse(self.odt.open(self.original_filename))
+				for el in list(tree.iter()):
+					self.prune_svg(el)
+				return ET.tostring(tree, pretty_print=pretty_print, encoding="unicode")
+		else:
+			return self.odt.open(self.original_filename).read()
+
+	def prune_svg(self, element):
+		for key in element.attrib.keys():
+			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
+				del element.attrib[key]
+			elif key.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
+				del element.attrib[key]
+		for child in list(element):
+			#print child.tag
+			if child.tag.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
+				element.remove(child)
+			elif child.tag.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
+				element.remove(child)
+			elif child.tag.startswith("{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"):
+				element.remove(child)
+			else:
+				self.prune_svg(child)
 
 #============================================================================
 # Exceptions
