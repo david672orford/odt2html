@@ -3,14 +3,20 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 17 April 2014
+# Last modified: 18 April 2014
 #
-# References:
+# == Opendocument ==
 # * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
 # * http://docs.oasis-open.org/office/v1.2/OpenDocument-v1.2-part1.html
+#
+# == Python Elementtree ==
 # * https://docs.python.org/2/library/xml.etree.elementtree.html
 # * http://lxml.de/
 # * http://eli.thegreenplace.net/2012/03/15/processing-xml-in-python-with-elementtree/
+#
+# == Epub ==
+# * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
+# * https://code.google.com/p/python-epub-builder/
 #
 
 import zipfile
@@ -50,6 +56,8 @@ def clean_dimensions(style_arg):
 		words.append(word)
 	return " ".join(words)
 
+# Convert a CSS-style dimension with units into points.
+# We use this when making comparisons.
 def dimension2points(dimension):
 	global dimensions_re
 	m = dimensions_re.match(dimension)
@@ -129,8 +137,10 @@ class Odt2Html(object):
 			self.convert_element(odt_footer[0], html_footer)
 			self.html_body.append(html_footer)
 
-		# Convert the styles to CSS and insert it into the head of the document.
-		self.html_head.append(self.styles.get_css())
+		# Convert the styles to CSS and insert it them into the head of the document.
+		style = E.style({"type": "text/css"})
+		style.text = re.sub(r"^", r"      ", self.styles.get_css(), flags=re.MULTILINE) + "\n    "
+		self.html_head.append(style)
 
 		# Write the HTML tree to a file
 		outfh = open(html_filename, "w")
@@ -372,6 +382,11 @@ class OdtStyle2Css(object):
 					print "    deferring loading"
 					return False
 
+			# FIXME: read up on this. Does this attribute really indicate a new page?
+			if "master-page-name" in odt_style.attrib and odt_style.attrib["master-page-name"] != "":
+				self.break_before_styles[style_name] = "page"
+
+			# Process the style's children
 			for el in odt_style:
 				if self.debug:
 					print "    %s %s" % (el.tag, odt_style.attrib)
@@ -396,19 +411,22 @@ class OdtStyle2Css(object):
 						if prop in el.attrib:
 							css_style.properties[prop] = el.attrib[prop]
 
-					# Style from https://gist.github.com/unruthless/413930
 					if "text-position" in el.attrib:
-						css_style.properties["font-size"] = "75%"
-						css_style.properties["line-height"] = "0"
-						css_style.properties["position"] = "relative"
-						css_style.properties["vertical-align"] = "basename"
-						position = el.attrib["text-position"]
-						if position.startswith("super "):
-							css_style.properties["top"] = "-0.5em"
-						elif position.startswith("sub "):
-							css_style.properties["bottom"] = "-0.25em"
+						m = re.match("^((super)|(sub)|(\d+%))( (\d+%))?$", el.attrib["text-position"])
+						if not m:
+							print "Warning: Invalid text-position: %s" % position
 						else:
-							print "Warning: Unimplemented text-position: %s" % position
+							vertical_align = m.group(1)
+							font_scale = m.group(6)
+							if font_scale is None:
+								if vertical_align == "super" or vertical_align == "sub":
+									font_scale = "60%"
+							if vertical_align == "0%":
+								print "Warning: nested text-position in %s not converted correctly" % style_name
+							else:
+								css_style.properties["vertical-align"] = vertical_align
+								if font_scale is not None:
+									css_style.properties["font-size"] = font_scale
 
 				elif el.tag == "paragraph-properties":
 					for prop in ("text-align", "text-indent"):
@@ -462,8 +480,8 @@ class OdtStyle2Css(object):
 
 		# Something to start with
 		css.append("HTML, BODY, H1, H2, H3, H4, H4 { margin: 0; padding: 0 }")
-		css.append("BODY { margin: 0.5in }")
-		css.append("@media (max-width: 8in) { BODY { margin: 0.375in 0.125in 0.375in 0.125in } }")
+		css.append("BODY { margin: 0.375in 0.125in 0.375in 0.125in }")			# small screens
+		css.append("@media (min-width: 8.5in) { BODY { margin: 0.5in } }")		# large screens
 		css.append("P { margin: 0 }")
 		css.append("UL { margin: 0 }")
 		css.append("TABLE { border-collapse: collapse }")
@@ -493,9 +511,7 @@ class OdtStyle2Css(object):
 				css.append(style_text)
 
 		# Convert to indented text/css
-		style = E.style({"type": "text/css"})
-		style.text = "\n      " + "\n      ".join(css) + "\n    "
-		return style
+		return "\n".join(css)
 
 if __name__ == "__main__":
 	import codecs
