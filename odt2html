@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 22 May 2014
+# Last modified: 23 May 2014
 
 #=============================================================================
 # To the User
@@ -161,6 +161,7 @@ class Odt2Html(object):
 		self.simplify_table_borders = True
 		self.font_support_level = 1	# 0: weight and slant, 1: generic families, 2: specific families
 		self.collapse_styles = True
+		self.topsects_as_files = False
 
 		self.depth = 0				# recursion level
 		self.section_count = 0		# current top-level section
@@ -176,6 +177,7 @@ class Odt2Html(object):
 		elif output_format == "epub":
 			self.use_data_urls = False
 			self.keep_toc = False
+			self.topsects_as_files = True
 			self.load_and_convert()
 			self.save_epub(output_filename)
 		else:
@@ -236,8 +238,7 @@ class Odt2Html(object):
 				self.title = self.element_extract_text(headings[0])
 		if self.title is None:
 			raise OdfNotSupported("No document title")
-		else:
-			self.html_head.append(E.title(self.title))
+		self.html_head.append(E.title(self.title))
 
 		# Locate ODT document body
 		odt_body = content_xml.xpath("/document-content/body/text")[0]
@@ -262,8 +263,8 @@ class Odt2Html(object):
 
 		# Scan table cells and where they contain a single paragraph, subsume it.
 		for td in self.html_body.xpath(".//td"):
-			assert td.text is None
-			assert td.tail is None
+			assert td.text is None, "unexpected text: \"%s\"" % td.text
+			assert td.tail is None, "unexpected tail: \"%s\"" % td.tail
 			if len(td) == 1 and td[0].tag == "p":
 				p = td[0]
 				classes = []
@@ -301,6 +302,7 @@ class Odt2Html(object):
 				el.attrib[short_name] = value
 
 		if self.debug:
+			# FIXME: may be able to use encoding="unicode" here and rop the decode()
 			print ET.tostring(tree, pretty_print=True, encoding="utf-8").decode("utf-8")
 
 		return tree
@@ -312,6 +314,7 @@ class Odt2Html(object):
 		tree = ET.parse(self.odt.open(filename))
 		for el in list(tree.iter()):
 			self.svg_prune(el)
+		# FIXME: may be able to use encoding="unicode" here and rop the decode()
 		return ET.tostring(tree, pretty_print=pretty_print, encoding="utf-8").decode("utf-8")
 
 	def svg_prune(self, element):
@@ -339,14 +342,10 @@ class Odt2Html(object):
 		# We need this information in order to resolve links between subdocuments.
 		if odt_el.tag == "section":
 			self.section_count += 1
-			subdoc_id = "topsect%d" % self.section_count
 			subdoc_href = self.get_section_source_href(odt_el)
 			if subdoc_href is not None:
-				print subdoc_id, subdoc_href
-				self.subdocs_by_href[subdoc_href] = subdoc_id
-
-		#for child_el in odt_el:
-		#	self.scan_element(child_el)
+				#print "topsect%s" % self.section_count, subdoc_href
+				self.subdocs_by_href[subdoc_href] = self.section_count
 
 	# If this section encloses a subdocument of a master document,
 	# return a href to the subdocument with the extension changed
@@ -378,18 +377,37 @@ class Odt2Html(object):
 
 		if odt_el.tag == "sequence-decls":		# mystery
 			html_el = None
+		elif odt_el.tag == "section":
+			if self.debug:
+				print "  Section:", odt_el.attrib.get("name")
+			html_el = E.div()
+			if self.depth == 0:
+				self.section_count += 1
+				subdoc_href = self.get_section_source_href(odt_el)
+				if subdoc_href:		# if this is a child of a master document,
+					if self.section_count != self.subdocs_by_href[subdoc_href]:
+						raise AssertionError
+				html_el.attrib["id"] = "topsect%d" % self.section_count
+		elif odt_el.tag == "section-source":	# handled during pass 1
+			html_el = None
 		elif odt_el.tag == "h":
+			if self.debug:
+				print "  Heading:", self.element_extract_text(odt_el), style_name
 			level = int(odt_el.attrib['outline-level'])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
+
+				if style_name.startswith("P"):
+					raise AssertionError("Level 1 heading with paragraph style: %s" % style_name)
+
 				bookmarks = odt_el.xpath("./bookmark-start")
 				if len(bookmarks) > 0:
 					h_id = bookmarks[0].attrib["name"]
 				else:
 					h_id = "subh%d" % (len(self.h1s) + 1)
+				h_filename = "topsect%d.html" % self.section_count
 				h_text = self.element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
-				h_filename = "topsect%d.html" % self.section_count
 				self.h1s.append((h_filename, h_id, h_text))
 		elif odt_el.tag == "bookmark":
 			html_el = E.span({"dropme":odt_el.tag})
@@ -397,17 +415,6 @@ class Odt2Html(object):
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "bookmark-end":
 			html_el = E.span({"dropme":odt_el.tag})
-		elif odt_el.tag == "section":
-			html_el = E.div()
-			if self.depth == 0:
-				self.section_count += 1
-				section_id = "topsect%d" % self.section_count
-				subdoc_href = self.get_section_source_href(odt_el)
-				if section_id != self.subdocs_by_href[subdoc_href]:	# pass1 and pass2 sync
-					raise AssertionError
-				html_el.attrib["id"] = section_id
-		elif odt_el.tag == "section-source":	# handled during pass 1
-			html_el = None
 		elif odt_el.tag == "p":					# paragraph
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
@@ -429,7 +436,10 @@ class Odt2Html(object):
 			elif href.startswith("../"):		# relative to zip root (but outside)
 				href_html = self.href_to_html(href)
 				if href_html in self.subdocs_by_href:	# in same master document?
-					href = "#%s" % self.subdocs_by_href[href_html]
+					if self.topsects_as_files:
+						href = "topsect%s.html" % self.subdocs_by_href[href_html]
+					else:
+						href = "#topsect%s" % self.subdocs_by_href[href_html]
 				else:
 					# Make sure the file named (likely an ODT or HTML file) exists
 					href = href[3:]
@@ -464,7 +474,7 @@ class Odt2Html(object):
 				html_el.text = " "
 			else:
 				html_el = E.span({"class":"space"})
-				count = int(count * 1.15)			# 1.15 is fudge
+				count = int(count * 1.15)		# 1.15 is fudge
 				html_el.text = count * " "
 		elif odt_el.tag == "table":
 			html_el = E.table()
@@ -474,6 +484,7 @@ class Odt2Html(object):
 			html_el = E.thead()
 		elif odt_el.tag == "table-row":
 			html_el = E.tr()
+			style_name = None					# FIXME: table row style not implemented
 		elif odt_el.tag == "table-cell":
 			html_el = E.td()
 			if "number-rows-spanned" in odt_el.attrib:
@@ -483,9 +494,10 @@ class Odt2Html(object):
 			if self.simplify_table_borders:
 				style_name = None
 		elif odt_el.tag == "covered-table-cell":
-			html_el = None			# don't convert
+			html_el = None						# don't convert
 		elif odt_el.tag == "list":
 			html_el = E.ul()
+			style_name = None					# FIXME: list style not implemented
 		elif odt_el.tag == "list-header":
 			raise OdfNotImplementedYet("list-header")
 		elif odt_el.tag == "list-item":
@@ -500,7 +512,7 @@ class Odt2Html(object):
 			if self.keep_toc:
 				html_el = E.div({"id":"toc"})
 			else:
-				html_el = None		# don't convert
+				html_el = None					# don't convert
 		elif odt_el.tag == "table-of-content-source":
 			html_el = None
 		elif odt_el.tag == "index-body":
@@ -529,6 +541,11 @@ class Odt2Html(object):
 				if classname is not None:
 					html_el.attrib['class'] = classname
 				if self.styles.get_break_before(style_name) == "page":
+					# Push a horizontal rule into the HTML body (not the parent).
+					# We don't insert it into the parent because the heading which
+					# causes the break could be inside a section which encloses
+					# a subdocument and we want the page break to be before the
+					# start of the section.
 					if len(self.html_body) > 0:
 						self.html_body.append(E.hr({"class":"pagebreak"}))
 
@@ -630,7 +647,7 @@ class Odt2Html(object):
 				img_data = self.read_svg(href, pretty_print=False)
 			else:
 				img_data = self.odt.open(href, "r").read()
-			print "  Image data size:", len(img_data)
+			print "  Data URL for %s: %d bytes" % (href, len(img_data))
 			img.attrib['src'] = "data:%s;base64,%s" % (mimetype, urllib.quote(img_data.encode("base64")))
 		else:
 			img.attrib['src'] = href
@@ -653,7 +670,7 @@ class Odt2Html(object):
 			TABLE { border-collapse: collapse }
 			UL { margin: 0 }
 			TH, TD { vertical-align: top }
-			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			HR.pagebreak { margin: 0.5in -0.5in 0.5in -0.5in }
 			SPAN.space { white-space: pre-wrap }
 			DIV#dlbox { position: absolute; top: 0; right: 0; background-color: white }
 			DIV#dlbox A { display: inline-block; width: 60pt; height: 15pt; font-size: 12pt; padding: 3pt; border-style: solid; border-color: black; border-width: 0 0 thin thin }
@@ -835,7 +852,7 @@ class Odt2Html(object):
 			UL { margin: 0 }
 			TABLE { border-collapse: collapse }
 			TH, TD { vertical-align: top }
-			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			HR.pagebreak { margin: 0.5in -0.5in 0.5in -0.5in }
 			SPAN.space { white-space: pre-wrap }
 			""")
 
@@ -925,6 +942,10 @@ class CssStyle(object):
 		self.break_before = None	# "page" for page break before
 	def hashable(self):
 		return (self.template, str(self.properties))
+	def set_parent(self, parent):
+		self.properties.update(parent.properties)
+		self.media = parent.media
+		self.break_before = parent.break_before
 
 class OdtStyle2Css(object):
 	# Generic font names in ODF are different from those in CSS!
@@ -1022,7 +1043,7 @@ class OdtStyle2Css(object):
 					if self.debug:
 						print "    deferring loading"
 					return False
-				css_style.properties.update(parent_style.properties)
+				css_style.set_parent(parent_style)
 
 			# Process the style's children
 			for el in odt_style:
@@ -1169,9 +1190,9 @@ class OdtStyle2Css(object):
 	# HTML class to use is returned. Otherwise, None is returned.
 	def claim_style(self, style_name):
 		if not style_name in self.styles_byname:
-			if not style_name.startswith("M") and not style_name.startswith("L"):
+			if not style_name.startswith("M"):
 				print "  Warning: style %s used but not defined" % style_name
-			return None
+			return None		# nix it
 		css_style = self.styles_byname[style_name]
 		if self.collapse_styles and css_style.subst is not None:
 			css_style = css_style.subst
