@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 30 April 2014
+# Last modified: 22 May 2014
 
 #=============================================================================
 # To the User
@@ -163,8 +163,10 @@ class Odt2Html(object):
 		self.collapse_styles = True
 
 		self.depth = 0				# recursion level
+		self.subdoc_id = None
 		self.subdoc_count = 0		# in master document, which subdocument
-		self.subdocs = {}			# in master document, list of subdocuments
+		self.subdocs_by_href = {}	# in master document, list of subdocuments
+		self.subdocs_by_id = {}
 		self.title = None			# document title
 		self.h1s = []				# level 1 headings
 		self.images = []			# images to include in .epub file
@@ -224,8 +226,6 @@ class Odt2Html(object):
 		self.html_head = E.head()
 		self.html_head.append(E.meta({"http-equiv":"content-type","content":"text/html; charset=utf-8"}))
 		self.html_body = E.body()
-		self.html = E.html(self.html_head, self.html_body)
-		self.html_elementtree = ET.ElementTree(element=self.html)
 
 		# Search for the title of the document
 		titles = meta_xml.xpath("/document-meta/meta/title")
@@ -343,7 +343,8 @@ class Odt2Html(object):
 				self.subdoc_count += 1
 				subdoc_id = "subdoc%d" % self.subdoc_count
 				#print subdoc_id, subdoc_href
-				self.subdocs[subdoc_href] = subdoc_id
+				self.subdocs_by_href[subdoc_href] = subdoc_id
+				self.subdocs_by_id[subdoc_id] = subdoc_href
 
 		for child_el in odt_el:
 			self.scan_element(child_el)
@@ -389,7 +390,7 @@ class Odt2Html(object):
 					h_id = "subh%d" % (len(self.h1s) + 1)
 				h_text = self.element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
-				self.h1s.append((h_id, h_text))
+				self.h1s.append((self.subdoc_id, h_id, h_text))
 		elif odt_el.tag == "bookmark":
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "bookmark-start":
@@ -400,9 +401,11 @@ class Odt2Html(object):
 			html_el = E.div()
 			# If this is a section of a master document, give it the
 			# ID tag assigned during pass 1.
-			subdoc_href = self.get_section_source_href(odt_el)
+			self.subdoc_href = self.get_section_source_href(odt_el)
 			if subdoc_href is not None:
-				html_el.attrib['id'] = self.subdocs[subdoc_href]
+				self.subdoc_id = self.subdocs_by_href[self.subdoc_href]
+				html_el.attrib['id'] = self.subdoc_id
+				html_el.attrib['class'] = "subdoc"
 		elif odt_el.tag == "section-source":	# handled during pass 1
 			html_el = None
 		elif odt_el.tag == "p":					# paragraph
@@ -425,8 +428,8 @@ class Odt2Html(object):
 				pass
 			elif href.startswith("../"):		# relative to zip root
 				href_html = self.href_to_html(href)
-				if href_html in self.subdocs:	# in same master document?
-					href = "#%s" % self.subdocs[href_html]
+				if href_html in self.subdocs_by_href:	# in same master document?
+					href = "#%s" % self.subdocs_by_href[href_html]
 				else:
 					# Make sure the file named (likely an ODT or HTML file) exists
 					href = href[3:]
@@ -601,6 +604,8 @@ class Odt2Html(object):
 			elif html_el != html_parent_el:
 				html_parent_el.append(html_el)
 
+		self.subdoc_id = None
+
 	def convert_frame(self, odt_frame):
 		odt_image = odt_frame.xpath("./image")[0]
 		href = odt_image.attrib['href']
@@ -669,7 +674,9 @@ class Odt2Html(object):
 		# Write the HTML tree to a file
 		outfh = open(html_filename, "w")
 		outfh.write("<!DOCTYPE HTML>\n")
-		self.html_elementtree.write(outfh, encoding="utf-8", pretty_print=True)
+		html = E.html(self.html_head, self.html_body)
+		html_elementtree = ET.ElementTree(element=html)
+		html_elementtree.write(outfh, encoding="utf-8", pretty_print=True)
 
 	# Add a box to the top-rigth corner of the document with links
 	# to the PDF and ODT versions of this document.
@@ -714,8 +721,11 @@ class Odt2Html(object):
 			</container>
 			"""), zipfile.ZIP_DEFLATED)
 
+		# One copy of stylesheet
+		epub.writestr("stylesheet.css", self.epub_css().encode("utf-8"), zipfile.ZIP_DEFLATED)
+
 		#---------------------------------------------
-		# Create Content Index and add to archive
+		# Start building Content Index
 		#---------------------------------------------
 		index_tpl = ET.Element(
 			"{http://www.idpf.org/2007/opf}package",
@@ -728,19 +738,29 @@ class Odt2Html(object):
 				},
 			)
 
+		# Metadata about the book
 		metadata = E.metadata()
 		index_tpl.append(metadata)
-
-		manifest = E.manifest()
-		index_tpl.append(manifest)
-
-		spine = E.spine({"toc":"ncx"})
-		index_tpl.append(spine)
-
-		# Add metadata
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}title",self.title))
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}identifier",epub_uuid,{"id":"bookid"}))
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}language","en-US"))
+
+		# File which gives the book structure
+		manifest = E.manifest()
+		index_tpl.append(manifest)
+		manifest.append(E.item({
+			"id":"css",
+			"href":"stylesheet.css",
+			"media-type":"text/css",
+			}))
+		manifest.append(E.item({
+			"id":"ncx",
+			"href":"toc.ncx",
+			"media-type":"application/x-dtbncx+xml",
+			}))
+
+		spine = E.spine({"toc":"ncx"})
+		index_tpl.append(spine)
 
 		# Add single document file
 		manifest.append(E.item({
@@ -752,22 +772,7 @@ class Odt2Html(object):
 			"idref":"content"
 			}))
 
-		# Add CSS stylesheet to manifest (we will add it to the archive later)
-		manifest.append(E.item({
-			"id":"css",
-			"href":"stylesheet.css",
-			"media-type":"text/css",
-			}))
-
-		# Add Table of Contents to the manifest
-		manifest.append(E.item({
-			"id":"ncx",
-			"href":"toc.ncx",
-			"media-type":"application/x-dtbncx+xml",
-			}))
-
 		# Add embedded images to manifest (we will add them to the archive later)
-		i = 1
 		for image_filename, image_mimetype, image_compression in self.images:
 			manifest.append(E.item({
 				"id":"img-%d" % i,
@@ -776,15 +781,69 @@ class Odt2Html(object):
 				}))
 			i += 1
 			
-		# Add content index file to archive
+		#---------------------------------------------
+		# Add HTML files to archive
+		#---------------------------------------------
+
+		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
+		self.html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
+
+		parts = []
+		top = list(self.body)
+		
+
+		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
+			+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
+			+ ET.tostring(self.html_elementtree, encoding="utf-8", pretty_print=True)
+		epub.writestr("content.html", text, zipfile.ZIP_DEFLATED)
+
+		#---------------------------------------------
+		# Zip each embedded images and add it to
+		# the manifest
+		#---------------------------------------------
+		i = 1
+		for image_filename, image_mimetype, image_compression in self.images:
+			manifest.append(E.item({
+				"id":"img-%d" % i,
+				"href":image_filename,
+				"media-type":image_mimetype,
+				}))
+			i += 1
+			if image_mimetype == "image/svg+xml":
+				data = self.read_svg(image_filename)
+			else:
+				data = self.odt.open(image_filename).read()
+			epub.writestr(image_filename, data, image_compression)
+
+		#---------------------------------------------
+		# Zip content index and table of contents
+		#---------------------------------------------
 		epub.writestr("content.opf",
 			ET.tostring(ET.ElementTree(element=index_tpl), encoding="utf-8", pretty_print=True),
 			zipfile.ZIP_DEFLATED
 			)
+		epub.writestr("toc.ncx", self.epub_toc(), zipfile.ZIP_DEFLATED)
 
-		#---------------------------------------------
-		# Create XML TOC
-		#---------------------------------------------
+	def epub_css(self):
+		# The base CSS stylesheet for ebook readers. Remember that
+		# this is CSS 2.1, so no @media queries.
+		css = textwrap.dedent("""\
+			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
+			BODY { margin: 0.125in; font-size: 12pt }
+			H1, H2, H3, H4, H4 { font-size: inherit }
+			UL { margin: 0 }
+			TABLE { border-collapse: collapse }
+			TH, TD { vertical-align: top }
+			HR { margin: 0.5in -0.5in 0.5in -0.5in }
+			SPAN.space { white-space: pre-wrap }
+			""")
+
+		# Add the converted styles from the ODT file, again limited to CSS 2.1.
+		css += "\n".join(self.styles.get_css(2.1))
+
+		return css
+
+	def epub_toc(self):
 		ncx = ET.Element(
 			"{http://www.daisy.org/z3986/2005/ncx/}ncx",
 			{	"version": "2005-1",
@@ -807,12 +866,15 @@ class Odt2Html(object):
 		ncx.append(ncx_navmap)
 
 		i = 1
-		for h_id, h_text in self.h1s:
-			print "  H1:", h_id, h_text
+		for h_subdoc_id, h_id, h_text in self.h1s:
+			print "  H1:", h_subdoc_id, h_id, h_text
+			if h_subdoc_id is None:
+				raise AssertionError
+			href = self.subdocs_by_id[h_subdoc_id].split("/")[-1]
 			ncx_navmap.append(
 				E.navPoint(
 					E.navLabel(E.text(h_text)),
-					E.content({"src":"content.html#%s" % h_id}),
+					E.content({"src":"content.html#%s" % (href, h_id)}),
 					{	"id":"navpoint-%d" % i,
 						"playOrder":"%d" % i
 						},
@@ -823,53 +885,12 @@ class Odt2Html(object):
 		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
 			+ '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n' \
 			+ ET.tostring(ET.ElementTree(element=ncx), encoding="utf-8", pretty_print=True)
-		epub.writestr("toc.ncx", text, zipfile.ZIP_DEFLATED)
 
-		#---------------------------------------------
-		# Add HTML file to archive
-		#---------------------------------------------
-		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
-		self.html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
-		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
-			+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
-			+ ET.tostring(self.html_elementtree, encoding="utf-8", pretty_print=True)
-		epub.writestr("content.html", text, zipfile.ZIP_DEFLATED)
+		return text
 
-		#---------------------------------------------
-		# Add CSS stylesheet to archive
-		#---------------------------------------------
-
-		# The base CSS stylesheet for ebook readers. Remember that
-		# this is CSS 2.1, so no @media queries.
-		css = textwrap.dedent("""\
-			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
-			BODY { margin: 0.125in; font-size: 12pt }
-			H1, H2, H3, H4, H4 { font-size: inherit }
-			UL { margin: 0 }
-			TABLE { border-collapse: collapse }
-			TH, TD { vertical-align: top }
-			HR { margin: 0.5in -0.5in 0.5in -0.5in }
-			SPAN.space { white-space: pre-wrap }
-			""")
-
-		# Add the converted styles from the ODT file, again limited to CSS 2.1.
-		css += "\n".join(self.styles.get_css(2.1))
-
-		# We don't need to put the stylesheet in the <head>, we have
-		# a whole zip file to store it in.
-		epub.writestr("stylesheet.css", css.encode("utf-8"), zipfile.ZIP_DEFLATED)
-
-		#---------------------------------------------
-		# Take the list of images from <img> tags
-		# and copy them from the ODT file to the EPUB
-		# file.
-		#---------------------------------------------
-		for image_filename, image_mimetype, image_compression in self.images:
-			if image_mimetype == "image/svg+xml":
-				data = self.read_svg(image_filename)
-			else:
-				data = self.odt.open(image_filename).read()
-			epub.writestr(image_filename, data, image_compression)
+	#============================================================================
+	#
+	#============================================================================
 
 	# Is this element empty of text and children?
 	def element_empty(self, el):
@@ -1092,7 +1113,7 @@ class OdtStyle2Css(object):
 				elif el.tag == "table-properties":
 					if "width" in el.attrib:
 						width = el.attrib["width"]
-						if dimension2points(width) > (6.5 * 72.0):
+						if self.dimension2points(width) > (6.5 * 72.0):
 							width = "100%"
 						css_style.properties["width"] = width
 					else:
@@ -1161,6 +1182,8 @@ class OdtStyle2Css(object):
 			return self.stylename2classname(css_style.name)
 
 	def get_break_before(self, style_name):
+		if not style_name in self.styles_byname:	# because we do not yet convert all styles
+			return None
 		return self.styles_byname[style_name].break_before
 
 	# Return the converted styles as an array of CSS lines.
