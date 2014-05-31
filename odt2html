@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 28 April 2014
+# Last modified: 30 April 2014
 
 #=============================================================================
 # To the User
@@ -153,12 +153,14 @@ import uuid
 class Odt2Html(object):
 	def __init__(self, odt_filename, output_filename, output_format, debug):
 		self.odt_filename = odt_filename
+		self.debug = debug
+
 		self.keep_unused_styles = False
 		self.use_data_urls = True
 		self.keep_toc = True
 		self.simplify_table_borders = True
 		self.font_support_level = 1	# 0: weight and slant, 1: generic families, 2: specific families
-		self.debug = debug
+		self.collapse_styles = True
 
 		self.depth = 0				# recursion level
 		self.subdoc_count = 0		# in master document, which subdocument
@@ -180,7 +182,8 @@ class Odt2Html(object):
 			raise Exception
 
 	#============================================================================
-	#
+	# Load the style and content XML files into memory and create most of the
+	# output HTML document in memory.
 	#============================================================================
 	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
@@ -200,6 +203,7 @@ class Odt2Html(object):
 		self.styles = OdtStyle2Css(
 			self.debug,
 			self.keep_unused_styles,
+			self.collapse_styles,
 			self.simplify_table_borders,
 			self.font_support_level
 			)
@@ -231,7 +235,7 @@ class Odt2Html(object):
 			#headings = content_xml.xpath("/document-content/body/text/h")
 			headings = content_xml.xpath("/document-content/body/text//h")
 			if len(headings) > 0:
-				self.title = element_extract_text(headings[0])
+				self.title = self.element_extract_text(headings[0])
 		if self.title is None:
 			raise OdfNotSupported("No document title")
 		else:
@@ -356,7 +360,7 @@ class Odt2Html(object):
 		if len(section_sources) != 1:
 			raise OdfInvalid("%d <section-source> elements" % len(section_sources))
 		href = section_sources[0].attrib['href']
-		return href_to_html(href)
+		return self.href_to_html(href)
 
 	#============================================================================
 	# This function converts an ODT element to HTML and adds it to the
@@ -383,7 +387,7 @@ class Odt2Html(object):
 					h_id = bookmarks[0].attrib["name"]
 				else:
 					h_id = "subh%d" % (len(self.h1s) + 1)
-				h_text = element_extract_text(odt_el)
+				h_text = self.element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
 				self.h1s.append((h_id, h_text))
 		elif odt_el.tag == "bookmark":
@@ -405,7 +409,7 @@ class Odt2Html(object):
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
 			# it will move away from the bullet.
-			if html_parent_el.tag == "li" and element_empty(html_parent_el):
+			if html_parent_el.tag == "li" and self.element_empty(html_parent_el):
 				html_el = html_parent_el
 			else:
 				html_el = E.p()
@@ -420,7 +424,7 @@ class Odt2Html(object):
 			elif href.startswith("ftp:"):		# Internet
 				pass
 			elif href.startswith("../"):		# relative to zip root
-				href_html = href_to_html(href)
+				href_html = self.href_to_html(href)
 				if href_html in self.subdocs:	# in same master document?
 					href = "#%s" % self.subdocs[href_html]
 				else:
@@ -518,41 +522,42 @@ class Odt2Html(object):
 				html_el.tail = odt_el.tail
 
 			if style_name is not None:
-				if self.styles.mark_used(style_name) or self.keep_unused_styles:
-					html_el.attrib['class'] = stylename2classname(style_name)
+				classname = self.styles.claim_style(style_name)
+				if classname is not None:
+					html_el.attrib['class'] = classname
 				if self.styles.get_break_before(style_name) == "page":
 					if len(self.html_body) > 0:
 						self.html_body.append(E.hr())
 
 			if convert_children:
-				# First run through the children collapsing the unnecessary spans
-				# which Openoffice sometimes generates for no appearent reason.
-				collapsed_children = []
-				prev_el = None
-				for el in odt_el:
-					if prev_el is not None \
-							and el.tag == "span" and prev_el.tag == "span" \
-							and el.attrib == prev_el.attrib \
-							and prev_el.tail is None \
-							and prev_el.text is not None:
-						#print "collapsed"
-						prev_el.text += el.text
-						if el.tail is not None:
-							prev_el.tail = el.tail
-
-					else:
-						collapsed_children.append(el)
-						prev_el = el
-	
-				# Now call this function recursively to convert the children.
-				for el in collapsed_children:
+				# This function calls itself recursively to convert the children.
+				for child in odt_el:
 					self.depth += 1
-					self.convert_element(el, html_el)
+					self.convert_element(child, html_el)
 					self.depth -= 1
 
+				# Now run through the children collapsing the unnecessary spans
+				# which Google Docs creates for no appearent reason.
+				prev_child = None
+				for child in html_el:
+					#print child, child.text, child.tail, child.attrib
+					if prev_child is not None \
+							and child.tag == "span" and prev_child.tag == "span" \
+							and child.attrib == prev_child.attrib \
+							and prev_child.text is not None \
+							and (prev_child.tail is None or prev_child.tail == ""):
+						#print "collapsed"
+						prev_child.text += child.text
+						if child.tail is not None:
+							prev_child.tail = child.tail
+						html_el.remove(child)
+
+					else:
+						prev_child = child
+	
 			# If a <P> tag is completely empty, put a <BR> tag into it because
 			# in HTML 4 empty <P> tags are supposed to be ignored.
-			if odt_el.tag == "p" and element_empty(html_el):
+			if odt_el.tag == "p" and self.element_empty(html_el):
 				#html_el = E.br()
 				html_el.append(E.br())
 
@@ -639,8 +644,7 @@ class Odt2Html(object):
 		# The base stylesheet for web browers
 		css = textwrap.dedent("""\
 			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
-			BODY { font-size: 12pt }
-			BODY { margin: 0.375in 0.125in 0.375in 0.125in }
+			BODY { margin: 0.375in 0.125in 0.375in 0.125in; font-size: 12pt }
 			@media (min-width: 8.5in) { BODY { margin: 0.5in } }
 			H1, H2, H3, H4, H4 { font-size: inherit }
 			TABLE { border-collapse: collapse }
@@ -839,8 +843,7 @@ class Odt2Html(object):
 		# this is CSS 2.1, so no @media queries.
 		css = textwrap.dedent("""\
 			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
-			BODY { font-size: 12pt }
-			BODY { margin: 0.125in }
+			BODY { margin: 0.125in; font-size: 12pt }
 			H1, H2, H3, H4, H4 { font-size: inherit }
 			UL { margin: 0 }
 			TABLE { border-collapse: collapse }
@@ -868,34 +871,41 @@ class Odt2Html(object):
 				data = self.odt.open(image_filename).read()
 			epub.writestr(image_filename, data, image_compression)
 
-# Is this element empty of text and children?
-def element_empty(el):
-	return el.text is None and el.tail is None and len(list(el)) == 0
-
-# Extract text from an ODT element and its children. Throw away
-# any formatting.
-def element_extract_text(el):
-	text = ""
-	if el.text is not None:
-		text += el.text
-	for child_el in el:
-		text += element_extract_text(child_el)
-	if el.tail is not None:
-		text += el.tail
-	return text
-					
-# Convert an href which may have pointed to the ODT file to point
-# to the converted version instead.
-def href_to_html(href):
-	return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
+	# Is this element empty of text and children?
+	def element_empty(self, el):
+		return el.text is None and el.tail is None and len(list(el)) == 0
+	
+	# Extract text from an ODT element and its children. Throw away
+	# any formatting.
+	def element_extract_text(self, el):
+		text = ""
+		if el.text is not None:
+			text += el.text
+		for child_el in el:
+			text += self.element_extract_text(child_el)
+		if el.tail is not None:
+			text += el.tail
+		return text
+						
+	# Convert an href which may have pointed to the ODT file to point
+	# to the converted version instead.
+	def href_to_html(self, href):
+		return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
 
 #============================================================================
 # These classes take ODF stylesheets and convert them to CSS stylesheets.
 #============================================================================
 class CssStyle(object):
-	def __init__(self):
-		self.properties = {}
-		self.media = None
+	def __init__(self, name):
+		self.name = name			# name for ODF file
+		self.template = None		# printf style template
+		self.properties = {}		# what to put inside the curly brackets
+		self.media = None			# media query condition
+		self.used = False			# mentioned in document?
+		self.subst = None			# is this the same as some other style?
+		self.break_before = None	# "page" for page break before
+	def hashable(self):
+		return (self.template, str(self.properties))
 
 class OdtStyle2Css(object):
 	# Generic font names in ODF are different from those in CSS!
@@ -906,18 +916,19 @@ class OdtStyle2Css(object):
 		"script":"cursive",
 		}
 
-	def __init__(self, debug, keep_unused_styles, simplify_table_borders, font_support_level):
+	def __init__(self, debug, keep_unused_styles, collapse_styles, simplify_table_borders, font_support_level):
 		self.debug = debug
 		self.keep_unused_styles = keep_unused_styles
+		self.collapse_styles = collapse_styles
 		self.simplify_table_borders = simplify_table_borders
 		self.font_support_level = font_support_level
 
-		self.css_styles_byselector = {}
-		self.css_styles_byname = {}
-		self.break_before_styles = {}
-		self.style_names = set()
-		self.styles_used = set()
+		self.dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
 		self.fonts = {}
+		self.styles_ordered = []		# it may be nice to preserve the original order
+		self.styles_byselector = {}		# for inclusion of parent styles
+		self.styles_byname = {}
+		self.styles_byhashable = {}
 
 	# When you find the <font-face-decls>, pass it to this function.
 	def add_fonts(self, odt_font_face_decls):
@@ -950,7 +961,7 @@ class OdtStyle2Css(object):
 		# Make a second pass to convert styles which had unresolved dependencies.
 		for style in dependent:
 			if not self.add_style(style):
-				raise OdfInvalid("Failed to resolve style: %s %s" % (style.tag, style.attrib))
+				raise OdfInvalid("missing parent for style: %s %s" % (style.tag, style.attrib))
 		if self.debug:
 			print
 
@@ -959,43 +970,40 @@ class OdtStyle2Css(object):
 		if self.debug:
 			print "  %s %s" % (odt_style.tag, odt_style.attrib)
 		if odt_style.tag == "style":
-			style_name = odt_style.attrib['name']
-			self.style_names.add(style_name)
+			css_style = CssStyle(odt_style.attrib['name'])
+
 			style_family = odt_style.attrib['family']
-
-			css_style = CssStyle()
-
 			if style_family == "text":
-				template = "SPAN.%s"
+				css_style.template = "SPAN.%s"
 			elif style_family == "paragraph":
-				template = ".%s"	# P, H[12345], LI, or even TD
+				css_style.template = ".%s"	# P, H[12345], LI, or even TD
 			elif style_family == "table":
-				template = "TABLE.%s"
+				css_style.template = "TABLE.%s"
 			elif style_family == "table-column":
-				template = "COL.%s"
+				css_style.template = "COL.%s"
 			elif style_family == "table-cell":
 				if self.simplify_table_borders:
-					template = "TABLE.%s TD"
+					css_style.template = "TABLE.%s TD"
 				else:
-					template = "TD.%s"
+					css_style.template = "TD.%s"
 			elif style_family == "graphic":
-				template = "IMG.%s"
+				css_style.template = "IMG.%s"
 			elif style_family == "section":
-				template = "DIV.%s"
+				css_style.template = "DIV.%s"
 			else:
 				if self.debug:
 					print "    unimplemented style family: %s" % style_family
 				return True
 
 			# If this style has a parent, import its attributes.
-			if "parent-style-name" in odt_style.attrib:
-				try:
-					css_style.properties.update(
-						self.css_styles_byselector[(template, odt_style.attrib["parent-style-name"])].properties)
-				except KeyError:
+			parent_style_name = odt_style.attrib.get("parent-style-name")
+			if parent_style_name is not None:
+				parent_style = self.styles_byselector.get((css_style.template,parent_style_name))
+				if parent_style is None:
 					if self.debug:
 						print "    deferring loading"
 					return False
+				css_style.properties.update(parent_style.properties)
 
 			# Process the style's children
 			for el in odt_style:
@@ -1006,17 +1014,26 @@ class OdtStyle2Css(object):
 						print "      unimplemented style child: %s" % el.tag
 					continue
 
-				# Convert properties which ae generally applicable to block items.
+				# Convert properties which are generally applicable to block items.
 				for prop in (
 						"margin", "margin-left", "margin-right", "margin-top", "margin-bottom",
 						"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
 						"border", "border-left", "border-right", "border-top", "border-bottom",
-						"line-height",
 					):
 					if prop in el.attrib:
 						value = el.attrib[prop]
 						if value != "100%":		# don't know what 100% is supposed to mean, but it is poison...
-							css_style.properties[prop] = clean_dimensions(value)
+							css_style.properties[prop] = self.clean_dimensions(value)
+
+				# Convert percentage line height to multiplication factor because percentage
+				# line height is inherited differently in ODF and in CSS.
+				if "line-height" in el.attrib:
+					value = el.attrib["line-height"]
+					m = re.match(r'^(\d+)%$', value)
+					if m:
+						value = "%.2f" % (int(m.group(1)) / 100.0)
+					css_style.properties["line-height"] = value
+					
 
 				# Text in blocks or inline
 				if el.tag == "text-properties":
@@ -1048,7 +1065,7 @@ class OdtStyle2Css(object):
 								if vertical_align == "super" or vertical_align == "sub":
 									font_scale = "60%"
 							if vertical_align == "0%":
-								print "  Warning: nested text-position in %s not converted correctly" % style_name
+								print "  Warning: nested text-position in %s not converted correctly" % css_style.name
 							else:
 								css_style.properties["vertical-align"] = vertical_align
 								if font_scale is not None:
@@ -1067,7 +1084,7 @@ class OdtStyle2Css(object):
 						if prop in el.attrib:
 							css_style.properties[prop] = el.attrib[prop]
 					if "break-before" in el.attrib:
-						self.break_before_styles[style_name] = el.attrib["break-before"]
+						css_style.break_before = el.attrib["break-before"]
 						# Webkit uses non-standard attribute
 						if el.attrib["break-before"] == "column":
 							css_style.properties["-webkit-column-break-before"] = "always"
@@ -1098,7 +1115,7 @@ class OdtStyle2Css(object):
 			# FIXME: read up on this. Does this attribute really indicate a new page?
 			# NOTE: this will override the break-before in <paragraph-properties>
 			if "master-page-name" in odt_style.attrib and odt_style.attrib["master-page-name"] != "":
-				self.break_before_styles[style_name] = "page"
+				css_style.break_before = "page"
 
 			# If we are simplifying table cell borders, keep only one border setting
 			# picking one which is not "none".
@@ -1108,32 +1125,52 @@ class OdtStyle2Css(object):
 						del css_style.properties[name]
 						if value != "none":
 							css_style.properties["border"] = value
-				style_name = style_name.split(".")[0]
+				css_style.name = css_style.name.split(".")[0]
 
 			if self.debug:
-				print "    -->%s" % (template % style_name), css_style.properties
-			self.css_styles_byselector[(template, style_name)] = css_style
-			self.css_styles_byname[style_name] = css_style
+				print "    -->%s" % (css_style.template % css_style.name), css_style.properties
+			self.styles_ordered.append(css_style)
+			self.styles_byselector[(css_style.template, css_style.name)] = css_style
+			self.styles_byname[css_style.name] = css_style
+
+			hashable = css_style.hashable()
+			css_style.subst = self.styles_byhashable.get(hashable)
+			if css_style.subst is None:
+				self.styles_byhashable[hashable] = css_style
 
 		return True
 
-	def mark_used(self, style_name):
-		self.styles_used.add(style_name)
-		if not style_name in self.style_names and not style_name.startswith("M") and not style_name.startswith("L"):
-			print "  Warning: style %s used but not defined" % style_name
-		return style_name in self.css_styles_byname and len(self.css_styles_byname[style_name].properties) > 0
+	# Take an ODT style-name and replace any characters which
+	# are not allowed in a CSS class name.
+	def stylename2classname(self, style_name):
+		return style_name.replace('.','_')
+
+	# The HTML generator calls this when it adds an element which uses a styles.
+	# If the style exists, a note is made to include it in the CSS and the 
+	# HTML class to use is returned. Otherwise, None is returned.
+	def claim_style(self, style_name):
+		if not style_name in self.styles_byname:
+			if not style_name.startswith("M") and not style_name.startswith("L"):
+				print "  Warning: style %s used but not defined" % style_name
+			return None
+		css_style = self.styles_byname[style_name]
+		if self.collapse_styles and css_style.subst is not None:
+			css_style = css_style.subst
+		if len(css_style.properties) > 0 or self.keep_unused_styles:
+			css_style.used = True
+			return self.stylename2classname(css_style.name)
 
 	def get_break_before(self, style_name):
-		return self.break_before_styles.get(style_name, None)
+		return self.styles_byname[style_name].break_before
 
+	# Return the converted styles as an array of CSS lines.
 	def get_css(self, css_version):
 		css = []
 
-		for selector, css_style in self.css_styles_byselector.items():
-			(template, stylename) = selector
-			if self.keep_unused_styles or (len(css_style.properties) > 0 and stylename in self.styles_used):
+		for css_style in self.styles_ordered:
+			if self.keep_unused_styles or (len(css_style.properties) > 0 and css_style.used):
 				style_text = "%s{%s}" % (
-					(template % stylename2classname(stylename)),
+					(css_style.template % self.stylename2classname(css_style.name)),
 					";".join(["%s:%s" % (name, value) for name, value in css_style.properties.items()])
 					)
 				if css_style.media is not None and css_version >= 3.0:
@@ -1145,52 +1182,43 @@ class OdtStyle2Css(object):
 
 		return css
 
-# What does a valid dimension look like?
-dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
-
-# Parse the right-hand side of a CSS style setting, find the numeric
-# dimensions and enforce a minimum size. In the process, all units
-# get converted to points.
-def clean_dimensions(style_arg):
-	global dimensions_re
-	words = []
-	for word in style_arg.split(" "):
-		if dimensions_re.match(word):
-			points = dimension2points(word)
-			if points >= 0.8:
-				word = "%.2fpt" % points
-			else:
-				#word = "1px"
-				word = "thin"
-		words.append(word)
-	return " ".join(words)
-
-# Convert a CSS-style dimension with units into points.
-# We use this when making comparisons.
-def dimension2points(dimension):
-	global dimensions_re
-	m = dimensions_re.match(dimension)
-	if m:
-		if m.group(2) == "pt":
-			return float(m.group(1))
-		elif m.group(2) == "in":
-			return float(m.group(1)) * 72.0
-		elif m.group(2) == "mm":
-			return float(m.group(1)) * 72.0 / 25.4
-		elif m.group(2) == "cm":
-			return float(m.group(1)) * 72.0 / 2.54
-		elif m.group(2) == "px":
-			return float(m.group(1)) * 0.72			# about 100 DPI
-	raise OdfNotImplementedYet("dimension not understood: %s" % dimension)
+	# Parse the right-hand side of a CSS style setting, find the numeric
+	# dimensions and enforce a minimum size. In the process, all units
+	# get converted to points.
+	def clean_dimensions(self, style_arg):
+		words = []
+		for word in style_arg.split(" "):
+			if self.dimensions_re.match(word):
+				points = self.dimension2points(word)
+				if points >= 0.8:
+					word = "%.2fpt" % points
+				elif points < 0.0001:
+					word = "0pt"
+				else:
+					word = "thin"
+			words.append(word)
+		return " ".join(words)
+	
+	# Convert a CSS-style dimension with units into points.
+	# We use this when making comparisons.
+	def dimension2points(self, dimension):
+		m = self.dimensions_re.match(dimension)
+		if m:
+			if m.group(2) == "pt":
+				return float(m.group(1))
+			elif m.group(2) == "in":
+				return float(m.group(1)) * 72.0
+			elif m.group(2) == "mm":
+				return float(m.group(1)) * 72.0 / 25.4
+			elif m.group(2) == "cm":
+				return float(m.group(1)) * 72.0 / 2.54
+			elif m.group(2) == "px":
+				return float(m.group(1)) * 0.72			# about 100 DPI
+		raise OdfNotImplementedYet("dimension not understood: %s" % dimension)
 
 #============================================================================
-# General Utility Functions
+# Exceptions
 #============================================================================
-
-# Take an ODT style-name and replace any characters which
-# are not allowed in a CSS class name.
-def stylename2classname(stylename):
-	return stylename.replace('.','_')
 
 # We don't have this case covered
 class OdfNotImplementedYet(Exception):
