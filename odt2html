@@ -163,10 +163,8 @@ class Odt2Html(object):
 		self.collapse_styles = True
 
 		self.depth = 0				# recursion level
-		self.subdoc_id = None
-		self.subdoc_count = 0		# in master document, which subdocument
-		self.subdocs_by_href = {}	# in master document, list of subdocuments
-		self.subdocs_by_id = {}
+		self.section_count = 0		# current top-level section
+		self.subdocs_by_href = {}	# sections which represent child documents
 		self.title = None			# document title
 		self.h1s = []				# level 1 headings
 		self.images = []			# images to include in .epub file
@@ -244,11 +242,13 @@ class Odt2Html(object):
 		# Locate ODT document body
 		odt_body = content_xml.xpath("/document-content/body/text")[0]
 
-		# Do first pass
+		# Pass 1
+		self.section_count = 0
 		for odt_el in odt_body:
 			self.scan_element(odt_el)
 
-		# Convert the document and append it to the HTML body
+		# Pass 2: convert the document and append it to the HTML body
+		self.section_count = 0
 		for odt_el in odt_body:
 			self.convert_element(odt_el, self.html_body)
 
@@ -338,16 +338,15 @@ class Odt2Html(object):
 		# Collect the source file names of the subdocuments of a master document.
 		# We need this information in order to resolve links between subdocuments.
 		if odt_el.tag == "section":
+			self.section_count += 1
+			subdoc_id = "topsect%d" % self.section_count
 			subdoc_href = self.get_section_source_href(odt_el)
 			if subdoc_href is not None:
-				self.subdoc_count += 1
-				subdoc_id = "subdoc%d" % self.subdoc_count
-				#print subdoc_id, subdoc_href
+				print subdoc_id, subdoc_href
 				self.subdocs_by_href[subdoc_href] = subdoc_id
-				self.subdocs_by_id[subdoc_id] = subdoc_href
 
-		for child_el in odt_el:
-			self.scan_element(child_el)
+		#for child_el in odt_el:
+		#	self.scan_element(child_el)
 
 	# If this section encloses a subdocument of a master document,
 	# return a href to the subdocument with the extension changed
@@ -390,7 +389,8 @@ class Odt2Html(object):
 					h_id = "subh%d" % (len(self.h1s) + 1)
 				h_text = self.element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
-				self.h1s.append((self.subdoc_id, h_id, h_text))
+				h_filename = "topsect%d.html" % self.section_count
+				self.h1s.append((h_filename, h_id, h_text))
 		elif odt_el.tag == "bookmark":
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "bookmark-start":
@@ -399,13 +399,13 @@ class Odt2Html(object):
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "section":
 			html_el = E.div()
-			# If this is a section of a master document, give it the
-			# ID tag assigned during pass 1.
-			self.subdoc_href = self.get_section_source_href(odt_el)
-			if subdoc_href is not None:
-				self.subdoc_id = self.subdocs_by_href[self.subdoc_href]
-				html_el.attrib['id'] = self.subdoc_id
-				html_el.attrib['class'] = "subdoc"
+			if self.depth == 0:
+				self.section_count += 1
+				section_id = "topsect%d" % self.section_count
+				subdoc_href = self.get_section_source_href(odt_el)
+				if section_id != self.subdocs_by_href[subdoc_href]:	# pass1 and pass2 sync
+					raise AssertionError
+				html_el.attrib["id"] = section_id
 		elif odt_el.tag == "section-source":	# handled during pass 1
 			html_el = None
 		elif odt_el.tag == "p":					# paragraph
@@ -426,7 +426,7 @@ class Odt2Html(object):
 				pass
 			elif href.startswith("ftp:"):		# Internet
 				pass
-			elif href.startswith("../"):		# relative to zip root
+			elif href.startswith("../"):		# relative to zip root (but outside)
 				href_html = self.href_to_html(href)
 				if href_html in self.subdocs_by_href:	# in same master document?
 					href = "#%s" % self.subdocs_by_href[href_html]
@@ -530,7 +530,7 @@ class Odt2Html(object):
 					html_el.attrib['class'] = classname
 				if self.styles.get_break_before(style_name) == "page":
 					if len(self.html_body) > 0:
-						self.html_body.append(E.hr())
+						self.html_body.append(E.hr({"class":"pagebreak"}))
 
 			if convert_children:
 				# This function calls itself recursively to convert the children.
@@ -604,8 +604,6 @@ class Odt2Html(object):
 			elif html_el != html_parent_el:
 				html_parent_el.append(html_el)
 
-		self.subdoc_id = None
-
 	def convert_frame(self, odt_frame):
 		odt_image = odt_frame.xpath("./image")[0]
 		href = odt_image.attrib['href']
@@ -674,8 +672,7 @@ class Odt2Html(object):
 		# Write the HTML tree to a file
 		outfh = open(html_filename, "w")
 		outfh.write("<!DOCTYPE HTML>\n")
-		html = E.html(self.html_head, self.html_body)
-		html_elementtree = ET.ElementTree(element=html)
+		html_elementtree = ET.ElementTree(element=E.html(self.html_head, self.html_body))
 		html_elementtree.write(outfh, encoding="utf-8", pretty_print=True)
 
 	# Add a box to the top-rigth corner of the document with links
@@ -762,40 +759,44 @@ class Odt2Html(object):
 		spine = E.spine({"toc":"ncx"})
 		index_tpl.append(spine)
 
-		# Add single document file
-		manifest.append(E.item({
-			"id":"content",
-			"href":"content.html",		# path is relative to content.opf
-			"media-type":"application/xhtml+xml",
-			}))
-		spine.append(E.itemref({
-			"idref":"content"
-			}))
-
-		# Add embedded images to manifest (we will add them to the archive later)
-		for image_filename, image_mimetype, image_compression in self.images:
-			manifest.append(E.item({
-				"id":"img-%d" % i,
-				"href":image_filename,
-				"media-type":image_mimetype,
-				}))
-			i += 1
-			
 		#---------------------------------------------
-		# Add HTML files to archive
+		# Split previously generated HTML and save
+		# in multiple files. Add them to the manifest
+		# and spine.
 		#---------------------------------------------
 
 		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
-		self.html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
 
 		parts = []
-		top = list(self.body)
+		body = list(self.html_body)
+		i = 0
+		while len(body) > 0:
+			chunk = E.body()
+			chunk.append(body.pop(0))
+			while len(body) > 0 and not (body[0].tag == "div" and body[0].attrib.get("id","").startswith("topsect")):
+				chunk.append(body.pop(0))
 		
+			topsect_id = "topsect%d" % i
+			topsect_filename = "topsect%d.html" % i	
+			manifest.append(E.item({
+				"id":topsect_id,
+				"href":topsect_filename,
+				"media-type":"application/xhtml+xml",
+				}))
+			spine.append(E.itemref({
+				"idref":topsect_id
+				}))
 
-		text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
-			+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
-			+ ET.tostring(self.html_elementtree, encoding="utf-8", pretty_print=True)
-		epub.writestr("content.html", text, zipfile.ZIP_DEFLATED)
+			html = E.html(self.html_head, chunk)
+			html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
+			html_elementtree = ET.ElementTree(element=html)
+
+			text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
+				+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
+				+ ET.tostring(html_elementtree, encoding="utf-8", pretty_print=True)
+			epub.writestr(topsect_filename, text, zipfile.ZIP_DEFLATED)
+
+			i += 1
 
 		#---------------------------------------------
 		# Zip each embedded images and add it to
@@ -822,7 +823,7 @@ class Odt2Html(object):
 			ET.tostring(ET.ElementTree(element=index_tpl), encoding="utf-8", pretty_print=True),
 			zipfile.ZIP_DEFLATED
 			)
-		epub.writestr("toc.ncx", self.epub_toc(), zipfile.ZIP_DEFLATED)
+		epub.writestr("toc.ncx", self.epub_toc(epub_uuid), zipfile.ZIP_DEFLATED)
 
 	def epub_css(self):
 		# The base CSS stylesheet for ebook readers. Remember that
@@ -843,7 +844,7 @@ class Odt2Html(object):
 
 		return css
 
-	def epub_toc(self):
+	def epub_toc(self, epub_uuid):
 		ncx = ET.Element(
 			"{http://www.daisy.org/z3986/2005/ncx/}ncx",
 			{	"version": "2005-1",
@@ -866,15 +867,12 @@ class Odt2Html(object):
 		ncx.append(ncx_navmap)
 
 		i = 1
-		for h_subdoc_id, h_id, h_text in self.h1s:
-			print "  H1:", h_subdoc_id, h_id, h_text
-			if h_subdoc_id is None:
-				raise AssertionError
-			href = self.subdocs_by_id[h_subdoc_id].split("/")[-1]
+		for h_filename, h_id, h_text in self.h1s:
+			print "  H1:", h_filename, h_id, h_text
 			ncx_navmap.append(
 				E.navPoint(
 					E.navLabel(E.text(h_text)),
-					E.content({"src":"content.html#%s" % (href, h_id)}),
+					E.content({"src":"%s#%s" % (h_filename, h_id)}),
 					{	"id":"navpoint-%d" % i,
 						"playOrder":"%d" % i
 						},
