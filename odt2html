@@ -150,18 +150,46 @@ import uuid
 #============================================================================
 # ODT to HTML Converter
 #============================================================================
+class Odt2HtmlOptions(object):
+	# If False, then only one HTML file will be generated.
+	# If True, then one HTML file will be generated for
+	# each top-level <text:section>.
+	split_by_sections = False
+
+	# Use data: URLs for embedded images?
+	use_data_urls = True
+
+	# If the ODT file contains a table or contents, should we keep it?
+	keep_toc = True
+
+	# 0: weight and slant, 1: generic families, 2: specific families
+	font_support_level = 1
+
+	# Convert SVG files to PNG files?
+	svg2png = False
+
+	# Should we drop styles from the ODT file which are not
+	# used in the text?
+	keep_unused_styles = False
+
+	# If two styles have the same right-hand-side, keep only
+	# first one. This reduces file size, but you should not
+	# do this if you intend to edit the resulting style sheet
+	# later since styles which should represent different things
+	# will have been combined just because they look the same.
+	collapse_styles = True
+
+	# Openoffice uses unnecessarily complicated table border styles.
+	# Even though the borders of ajoining cells should collapse,
+	# it takes great care to define a border for only one of the
+	# cells.
+	simplify_table_borders = True
+
 class Odt2Html(object):
 	def __init__(self, odt_filename, output_filename, output_format, debug):
 		self.odt_filename = odt_filename
 		self.debug = debug
-
-		self.keep_unused_styles = False
-		self.use_data_urls = True
-		self.keep_toc = True
-		self.simplify_table_borders = True
-		self.font_support_level = 1	# 0: weight and slant, 1: generic families, 2: specific families
-		self.collapse_styles = True
-		self.topsects_as_files = False
+		self.opts = Odt2HtmlOptions()
 
 		self.depth = 0				# recursion level
 		self.section_count = 0		# current top-level section
@@ -175,9 +203,10 @@ class Odt2Html(object):
 			self.add_dlbox()
 			self.save_html(output_filename)
 		elif output_format == "epub":
-			self.use_data_urls = False
-			self.keep_toc = False
-			self.topsects_as_files = True
+			self.opts.use_data_urls = False
+			self.opts.keep_toc = False
+			self.opts.split_by_sections = True
+			self.opts.svg2png = True
 			self.load_and_convert()
 			self.save_epub(output_filename)
 		else:
@@ -204,10 +233,7 @@ class Odt2Html(object):
 		# Parse the styles from styles.xml and content.xml
 		self.styles = OdtStyle2Css(
 			self.debug,
-			self.keep_unused_styles,
-			self.collapse_styles,
-			self.simplify_table_borders,
-			self.font_support_level
+			self.opts
 			)
 		for font_face_decls in (
 			styles_xml.xpath("/document-styles/font-face-decls")[0],
@@ -310,14 +336,36 @@ class Odt2Html(object):
 	#============================================================================
 	# Load and strip an SVG file
 	#============================================================================
-	def read_svg(self, filename, pretty_print=True):
-		tree = ET.parse(self.odt.open(filename))
-		for el in list(tree.iter()):
-			self.svg_prune(el)
-		# FIXME: may be able to use encoding="unicode" here and rop the decode()
-		return ET.tostring(tree, pretty_print=pretty_print, encoding="utf-8").decode("utf-8")
+	def load_svg(self, filename, pretty_print=True):
+		if self.opts.svg2png:
+			import cairo
+			import rsvg
+			import StringIO
 
-	def svg_prune(self, element):
+			svg = rsvg.Handle()
+			svg.write(self.odt.open(filename).read())
+			svg.close()
+			width, height = svg.get_dimension_data()[:2]
+
+			surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+			ctx = cairo.Context(surface)
+			svg.render_cairo(ctx)
+
+			out_fh = StringIO.StringIO()
+			surface.write_to_png(out_fh)
+
+			filename = "%s.png" % filename		# ".svg.png"
+
+			return (filename, "image/png", out_fh.getvalue())
+
+		else:
+			tree = ET.parse(self.odt.open(filename))
+			for el in list(tree.iter()):
+				self.prune_svg(el)
+			# FIXME: may be able to use encoding="unicode" here and drop the decode()
+			return (filename, "image/svg+xml", ET.tostring(tree, pretty_print=pretty_print, encoding="utf-8").decode("utf-8"))
+
+	def prune_svg(self, element):
 		for key in element.attrib.keys():
 			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
 				del element.attrib[key]
@@ -332,7 +380,7 @@ class Odt2Html(object):
 			elif child.tag.startswith("{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"):
 				element.remove(child)
 			else:
-				self.svg_prune(child)
+				self.prune_svg(child)
 
 	#============================================================================
 	# Pass 1
@@ -344,7 +392,7 @@ class Odt2Html(object):
 			self.section_count += 1
 			subdoc_href = self.get_section_source_href(odt_el)
 			if subdoc_href is not None:
-				#print "topsect%s" % self.section_count, subdoc_href
+				#print self.section_count, subdoc_href
 				self.subdocs_by_href[subdoc_href] = self.section_count
 
 	# If this section encloses a subdocument of a master document,
@@ -384,7 +432,7 @@ class Odt2Html(object):
 			if self.depth == 0:
 				self.section_count += 1
 				subdoc_href = self.get_section_source_href(odt_el)
-				if subdoc_href:		# if this is a child of a master document,
+				if subdoc_href:					# if this is a child of a master document,
 					if self.section_count != self.subdocs_by_href[subdoc_href]:
 						raise AssertionError
 				html_el.attrib["id"] = "topsect%d" % self.section_count
@@ -405,7 +453,7 @@ class Odt2Html(object):
 					h_id = bookmarks[0].attrib["name"]
 				else:
 					h_id = "subh%d" % (len(self.h1s) + 1)
-				h_filename = "topsect%d.html" % self.section_count
+				h_filename = "content%d.html" % self.section_count
 				h_text = self.element_extract_text(odt_el)
 				html_el.attrib['id'] = h_id
 				self.h1s.append((h_filename, h_id, h_text))
@@ -436,8 +484,8 @@ class Odt2Html(object):
 			elif href.startswith("../"):		# relative to zip root (but outside)
 				href_html = self.href_to_html(href)
 				if href_html in self.subdocs_by_href:	# in same master document?
-					if self.topsects_as_files:
-						href = "topsect%s.html" % self.subdocs_by_href[href_html]
+					if self.opts.split_by_sections:
+						href = "content%s.html" % self.subdocs_by_href[href_html]
 					else:
 						href = "#topsect%s" % self.subdocs_by_href[href_html]
 				else:
@@ -491,7 +539,7 @@ class Odt2Html(object):
 				html_el.attrib["rowspan"] = odt_el.attrib["number-rows-spanned"]
 			if "number-columns-spanned" in odt_el.attrib:
 				html_el.attrib["colspan"] = odt_el.attrib["number-columns-spanned"]
-			if self.simplify_table_borders:
+			if self.opts.simplify_table_borders:
 				style_name = None
 		elif odt_el.tag == "covered-table-cell":
 			html_el = None						# don't convert
@@ -509,7 +557,7 @@ class Odt2Html(object):
 		elif odt_el.tag == "page-number":		# FIXME: what about the content (which is an actual page number)?
 			html_el = ET.Comment("page-number")
 		elif odt_el.tag == "table-of-content":
-			if self.keep_toc:
+			if self.opts.keep_toc:
 				html_el = E.div({"id":"toc"})
 			else:
 				html_el = None					# don't convert
@@ -642,9 +690,9 @@ class Odt2Html(object):
 
 		# http://www.websiteoptimization.com/speed/tweak/inline-images/
 		img = E.img({"alt":""})		# required for XHTML to validate
-		if self.use_data_urls:
+		if self.opts.use_data_urls:
 			if mimetype == "image/svg+xml":
-				img_data = self.read_svg(href, pretty_print=False)
+				href, mimetype, img_data = self.load_svg(href, pretty_print=False)
 			else:
 				img_data = self.odt.open(href, "r").read()
 			print "  Data URL for %s: %d bytes" % (href, len(img_data))
@@ -784,24 +832,27 @@ class Odt2Html(object):
 
 		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
 
-		parts = []
-		body = list(self.html_body)
+		remaining = list(self.html_body)
 		i = 0
-		while len(body) > 0:
-			chunk = E.body()
-			chunk.append(body.pop(0))
-			while len(body) > 0 and not (body[0].tag == "div" and body[0].attrib.get("id","").startswith("topsect")):
-				chunk.append(body.pop(0))
+		while len(remaining) > 0:
+			if self.opts.split_by_sections:
+				chunk = E.body()
+				chunk.append(remaining.pop(0))
+				while len(remaining) > 0 and not (remaining[0].tag == "div" and remaining[0].attrib.get("id","").startswith("topsect")):
+					chunk.append(remaining.pop(0))
+			else:
+				chunk = self.html_body
+				remaining = []
 		
-			topsect_id = "topsect%d" % i
-			topsect_filename = "topsect%d.html" % i	
+			content_id = "content%d" % i
+			content_filename = "content%d.html" % i	
 			manifest.append(E.item({
-				"id":topsect_id,
-				"href":topsect_filename,
+				"id":content_id,
+				"href":content_filename,
 				"media-type":"application/xhtml+xml",
 				}))
 			spine.append(E.itemref({
-				"idref":topsect_id
+				"idref":content_id
 				}))
 
 			html = E.html(self.html_head, chunk)
@@ -811,7 +862,7 @@ class Odt2Html(object):
 			text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
 				+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
 				+ ET.tostring(html_elementtree, encoding="utf-8", pretty_print=True)
-			epub.writestr(topsect_filename, text, zipfile.ZIP_DEFLATED)
+			epub.writestr(content_filename, text, zipfile.ZIP_DEFLATED)
 
 			i += 1
 
@@ -821,17 +872,19 @@ class Odt2Html(object):
 		#---------------------------------------------
 		i = 1
 		for image_filename, image_mimetype, image_compression in self.images:
+			i += 1
+
+			if image_mimetype == "image/svg+xml":
+				image_filename, image_mimetype, data = self.load_svg(image_filename)
+			else:
+				data = self.odt.open(image_filename).read()
+			epub.writestr(image_filename, data, image_compression)
+
 			manifest.append(E.item({
 				"id":"img-%d" % i,
 				"href":image_filename,
 				"media-type":image_mimetype,
 				}))
-			i += 1
-			if image_mimetype == "image/svg+xml":
-				data = self.read_svg(image_filename)
-			else:
-				data = self.odt.open(image_filename).read()
-			epub.writestr(image_filename, data, image_compression)
 
 		#---------------------------------------------
 		# Zip content index and table of contents
@@ -956,12 +1009,9 @@ class OdtStyle2Css(object):
 		"script":"cursive",
 		}
 
-	def __init__(self, debug, keep_unused_styles, collapse_styles, simplify_table_borders, font_support_level):
+	def __init__(self, debug, opts):
 		self.debug = debug
-		self.keep_unused_styles = keep_unused_styles
-		self.collapse_styles = collapse_styles
-		self.simplify_table_borders = simplify_table_borders
-		self.font_support_level = font_support_level
+		self.opts = opts
 
 		self.dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
 		self.fonts = {}
@@ -975,7 +1025,7 @@ class OdtStyle2Css(object):
 		for font_face in odt_font_face_decls:
 			name = font_face.attrib["name"]
 			font_families = []
-			if self.font_support_level >= 2 and "font-family" in font_face.attrib:
+			if self.opts.font_support_level >= 2 and "font-family" in font_face.attrib:
 				value = font_face.attrib["font-family"]
 				font_families.append(value)
 			if "font-family-generic" in font_face.attrib:	
@@ -1022,7 +1072,7 @@ class OdtStyle2Css(object):
 			elif style_family == "table-column":
 				css_style.template = "COL.%s"
 			elif style_family == "table-cell":
-				if self.simplify_table_borders:
+				if self.opts.simplify_table_borders:
 					css_style.template = "TABLE.%s TD"
 				else:
 					css_style.template = "TD.%s"
@@ -1077,7 +1127,7 @@ class OdtStyle2Css(object):
 
 				# Text in blocks or inline
 				if el.tag == "text-properties":
-					if self.font_support_level >= 1:
+					if self.opts.font_support_level >= 1:
 						font_name = el.attrib.get("font-name")
 						if font_name is not None:
 							font_family = self.fonts[font_name]
@@ -1159,7 +1209,7 @@ class OdtStyle2Css(object):
 
 			# If we are simplifying table cell borders, keep only one border setting
 			# picking one which is not "none".
-			if style_family == "table-cell" and self.simplify_table_borders:
+			if style_family == "table-cell" and self.opts.simplify_table_borders:
 				for name, value in list(css_style.properties.items()):
 					if name.startswith("border-"):
 						del css_style.properties[name]
@@ -1194,9 +1244,9 @@ class OdtStyle2Css(object):
 				print "  Warning: style %s used but not defined" % style_name
 			return None		# nix it
 		css_style = self.styles_byname[style_name]
-		if self.collapse_styles and css_style.subst is not None:
+		if self.opts.collapse_styles and css_style.subst is not None:
 			css_style = css_style.subst
-		if len(css_style.properties) > 0 or self.keep_unused_styles:
+		if len(css_style.properties) > 0 or self.opts.keep_unused_styles:
 			css_style.used = True
 			return self.stylename2classname(css_style.name)
 
@@ -1210,7 +1260,7 @@ class OdtStyle2Css(object):
 		css = []
 
 		for css_style in self.styles_ordered:
-			if self.keep_unused_styles or (len(css_style.properties) > 0 and css_style.used):
+			if self.opts.keep_unused_styles or (len(css_style.properties) > 0 and css_style.used):
 				style_text = "%s{%s}" % (
 					(css_style.template % self.stylename2classname(css_style.name)),
 					";".join(["%s:%s" % (name, value) for name, value in css_style.properties.items()])
