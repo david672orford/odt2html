@@ -136,6 +136,7 @@
 # * Figure out what bookmarks are and whether we should implement them
 # * Drop page numbers from table of contents
 # * Test with weird files from Google Docs
+# * Implement right alignment of tables and centering of cell content
 
 import zipfile
 import sys
