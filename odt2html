@@ -1,9 +1,9 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Copyright 2014, Trinity College Computing Center
+# Copyright 2014, 2015, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 30 May 2014
+# Last modified: 25 September 2015
 
 #=============================================================================
 # To the User
@@ -434,6 +434,7 @@ class Odt2Html(object):
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "bookmark-end":
 			html_el = E.span({"dropme":odt_el.tag})
+
 		elif odt_el.tag == "p":					# paragraph
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
@@ -495,6 +496,12 @@ class Odt2Html(object):
 				html_el = E.span({"class":"space"})
 				count = int(count * 1.15)		# 1.15 is fudge
 				html_el.text = count * " "
+		elif odt_el.tag == "frame":
+			html_el = self.convert_frame(odt_el)
+			convert_children = False
+		elif odt_el.tag == "page-number":		# FIXME: what about the content (which is an actual page number)?
+			html_el = ET.Comment("page-number")
+
 		elif odt_el.tag == "table":
 			html_el = E.table()
 		elif odt_el.tag == "table-column":
@@ -514,6 +521,7 @@ class Odt2Html(object):
 				style_name = None
 		elif odt_el.tag == "covered-table-cell":
 			html_el = None						# don't convert
+
 		elif odt_el.tag == "list":
 			html_el = E.ul()
 			style_name = None					# FIXME: list style not implemented
@@ -521,12 +529,7 @@ class Odt2Html(object):
 			raise OdfNotImplementedYet("list-header")
 		elif odt_el.tag == "list-item":
 			html_el = E.li()
-		elif odt_el.tag == "frame":
-			html_el = self.convert_frame(odt_el)
-			html_el.attrib['style'] = "max-width:%s;max-height:%s" % (odt_el.attrib['height'], odt_el.attrib['height'])
-			convert_children = False
-		elif odt_el.tag == "page-number":		# FIXME: what about the content (which is an actual page number)?
-			html_el = ET.Comment("page-number")
+
 		elif odt_el.tag == "table-of-content":
 			if self.opts.keep_toc:
 				html_el = E.div({"id":"toc"})
@@ -534,16 +537,32 @@ class Odt2Html(object):
 				html_el = None					# don't convert
 		elif odt_el.tag == "table-of-content-source":
 			html_el = None
+
+		elif odt_el.tag == "alphabetical-index":
+			html_el = E.div({"id":"index"})
+		elif odt_el.tag == "alphabetical-index-source":
+			html_el = None
+		elif odt_el.tag == "alphabetical-index-mark-start":
+			print "  Index entry:", odt_el.attrib['id'], odt_el.tail
+			html_el = None
+		elif odt_el.tag == "alphabetical-index-mark-end":
+			html_el = None
+		elif odt_el.tag == "alphabetical-index-mark":
+			print "  Index entry:", odt_el.attrib['string-value'], odt_el.attrib.get('key1')
+			html_el = None
+
 		elif odt_el.tag == "index-body":
 			html_el = E.div()
 		elif odt_el.tag == "index-title":
 			html_el = E.div()
+
 		elif odt_el.tag == "user-defined":
 			html_el = E.span({"class":"user-defined"})	# class is not used
 		elif odt_el.tag == "variable-decls":	# FIXME: is this important?
 			html_el = None	# drop children too
 		elif odt_el.tag == "variable-set":		# FIXME: is this important?
 			html_el = E.span({"dropme":odt_el.tag})
+
 		else:									# unimplemented but not supressed
 			#print "  Warning: unimplemented tag: %s" % odt_el.tag
 			#html_el = E.span()
@@ -569,7 +588,7 @@ class Odt2Html(object):
 						self.html_body.append(E.hr({"class":"pagebreak"}))
 
 			if convert_children:
-				# This function calls itself recursively to convert the children.
+				# Call this function recursively to convert the children.
 				for child in odt_el:
 					self.depth += 1
 					self.convert_element(child, html_el)
@@ -584,9 +603,11 @@ class Odt2Html(object):
 							and child.tag == "span" and prev_child.tag == "span" \
 							and child.attrib == prev_child.attrib \
 							and prev_child.text is not None \
-							and (prev_child.tail is None or prev_child.tail == ""):
+							and (prev_child.tail is None or prev_child.tail == "") \
+							and len(prev_child) == 0 and len(child) == 0:
 						#print "collapsed"
-						prev_child.text += child.text
+						if child.text is not None:
+							prev_child.text += child.text
 						if child.tail is not None:
 							prev_child.tail = child.tail
 						html_el.remove(child)
@@ -645,6 +666,15 @@ class Odt2Html(object):
 		href = odt_image.attrib['href']
 		img = E.img({"alt":""})		# required for XHTML to validate
 		img.attrib["src"] = self.add_image(href)
+		style = [
+			"max-width:%s" % odt_frame.attrib['width'],
+			"max-height:%s" % odt_frame.attrib['height'],
+			]
+		if odt_frame.attrib['anchor-type'] == 'paragraph' and 'x' in odt_frame.attrib and 'y' in odt_frame.attrib:
+			style.append('position:absolute')
+			style.append('left:%s' % odt_frame.attrib['x'])
+			style.append('top:%s' % odt_frame.attrib['y'])
+		img.attrib['style'] = ";".join(style)
 		return img
 
 	#============================================================================
@@ -656,6 +686,7 @@ class Odt2Html(object):
 
 		# The base stylesheet for web browers
 		css = textwrap.dedent("""\
+			* { position: relative }
 			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
 			BODY { margin: 0.375in 0.125in 0.375in 0.125in; font-size: 12pt }
 			@media (min-width: 8.5in) { BODY { margin: 0.5in } }
@@ -692,7 +723,7 @@ class Odt2Html(object):
 		dlbox = E.div()
 		dlbox.attrib["id"] = "dlbox"
 		basename = os.path.splitext(os.path.basename(self.odt_filename))[0]
-		dlbox.append(E.a(u"Print PDF", {	# <-- space in non-breaking
+		dlbox.append(E.a(u"Print PDF", {	# <-- space is non-breaking
 			"title":"Download this page as a PDF file for high-quality printing",
 			"href":"%s.pdf" % basename,
 			"type":"application/pdf"
@@ -839,6 +870,7 @@ class Odt2Html(object):
 		# The base CSS stylesheet for ebook readers. Remember that
 		# this is CSS 2.1, so no @media queries.
 		css = textwrap.dedent("""\
+			* { position: relative }
 			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
 			BODY { margin: 0.125in; font-size: 12pt }
 			H1, H2, H3, H4, H4 { font-size: inherit }
@@ -1346,8 +1378,9 @@ if __name__ == "__main__":
 
 	debug = 0
 	output_format = "html"
+	output_directory = None
 	force = False
-	while len(sys.argv) >= 2 and sys.argv[1].startswith("--"):
+	while len(sys.argv) >= 2 and sys.argv[1].startswith("-"):
 		if sys.argv[1] == "--debug":
 			debug = 1
 			force = True
@@ -1355,6 +1388,13 @@ if __name__ == "__main__":
 			force = True
 		elif sys.argv[1] == "--epub":
 			output_format = "epub"
+		elif sys.argv[1] == "-o":
+			if len(sys.argv) >= 3:
+				sys.argv.pop(1)	# -o
+				output_directory = sys.argv[1]
+			else:
+				sys.stderr.write("Missing argument to -o\n")
+				sys.exit(1)
 		else:
 			sys.stderr.write("Unrecognized option: %s\n" % sys.argv[1])
 			sys.exit(1)
@@ -1368,7 +1408,10 @@ if __name__ == "__main__":
 		if ext != ".odt":
 			sys.stderr.write("Not an ODT file.\n")
 			sys.exit(1)
-		output_filename = "%s.%s" % (basename, output_format)
+		if output_directory is None:
+			output_filename = "%s.%s" % (basename, output_format)
+		else:
+			output_filename = os.path.join(output_directory, "%s.%s" % (os.path.basename(basename), output_format))
 
 		filename_mtime = os.path.getmtime(filename)
 		if force or not os.path.exists(output_filename) or os.path.getmtime(output_filename) < filename_mtime:
@@ -1385,7 +1428,7 @@ if __name__ == "__main__":
 			try:
 				Odt2Html(filename, output_filename, output_format, debug)
 			except OdfNotImplementedYet as e:
-				sys.stderr.write("ODF Feature not implemented: %s\n" % unicode(e))
+				sys.stderr.write("ODF feature not implemented: %s\n" % unicode(e))
 				sys.exit(1)
 			except OdfNotSupported as e:
 				sys.stderr.write("Change unsupported formatting: %s\n" % unicode(e))
