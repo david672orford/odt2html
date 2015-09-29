@@ -576,7 +576,13 @@ class Odt2Html(object):
 		elif odt_el.tag == "forms":
 			html_el = None
 		elif odt_el.tag == "control":
-			html_el = E.span({"dropme":odt_el.tag})
+			print "control"
+			html_el = E.span(
+				{'style':'border: thin solid black;display:inline-block;width:%s;height:%s' % (
+					odt_el.attrib['width'],
+					odt_el.attrib['height']
+					)}
+				)
 
 		else:									# unimplemented but not supressed
 			#print "  Warning: unimplemented tag: %s" % odt_el.tag
