@@ -10,27 +10,30 @@
 #=============================================================================
 #
 # This program converts Opendocument word-processing files such as those 
-# produced by Openoffice into HTML format. It can also produce EPUB files
-# which are XHTML files packed into a zip archive with some index and
-# metadata files.
+# produced by Openoffice into clean HTML files.
 #
 # == Usage ==
 # 
 # odt2html [--debug] [--force] [--epub] <filename.odt>...
 #
-# Each ODT file is converted to a single HTML or EPUB file. The output
-# file will have the same base name and will be placed in the same 
-# directory. If the output file already exists and is newer than the
-# input file, then that file will be skipped unless the --debug or 
-# --force option was used.
+#  --debug  print debug messages
+#  --force  regenerate the output file even if the input file is not newer
+#  --epub   break the output into one HTML file per section and wrap them
+#           in an EPUB file
+#
+# Each input ODT file is converted to a single HTML or EPUB file. The output
+# file will have the same base name and will be placed in the same directory.
 #
 # == Preparing Documents for Conversion ==
 #
-# This program is designed as part of a document preparation workflow to
-# produce high-quality HTML files from robustly-formatted Opendocument
-# word-processing files. Fragile formatting which would break of the font
-# or margins were changed will also break when the document is converted
-# to HTML. Some examples of formatting problems which you should correct:
+# This program is designed as part of a document preparation workflow which
+# prepares documents both for printing and for the web. In other words, it
+# is designed to convert documents which you carefully prepare with the
+# limitations of the HTML format in mind. They must avoid things such as tabs
+# which cannot be represented in HTML without hacks and they must have clean
+# and correct formatting which does not break when the page is resized.
+#
+# Some examples of formatting problems which you should correct:
 #
 # * This program needs to know your document's title. It will look first
 #   in the metadata (go to File->Properties and look under the Description
@@ -77,9 +80,27 @@
 # This generally works so well that documents originally formatted for
 # US Letter paper can be read conformatly on the screen of a smartphone.
 #
-# A few CSS tricks improve reading on small screens. For one, the margins
-# are cut from 1/2" to 1/8" for narrow screens. Second, multi-column layout
-# is disabled for narrow screens.
+# == Supported ODF Features ==
+#
+# * Headings
+# * Paragraph indentation
+# * Font changes including family, weight, slant, superscript, subscript
+# * Text color (forground and background)
+# * Tables with borders and padding
+# * Unordered Lists
+# * Hyperlinks
+# * Raster images in JPEG, GIF, and PNG formats
+# * SVG drawings
+# * Multiple columns
+#
+# == Not Yet Supported ==
+#
+# * Page background color
+#
+# == No Plans to Support ==
+#
+# * Embedded openoffice drawings (use SVG instead)
+# * Tabs
 #
 # == Inter-Document Hyperlinks ==
 #
@@ -89,44 +110,54 @@
 #
 # == Master Documents ==
 #
-# To convert a master document, first export it as an ODT file and convert
-# that.
-#
+# To convert a master document, first export it as an ODT file and convert that.
 # Hyperlinks between the subdocuments of a master document will be converted
 # to internal links within the final document.
 #
-# == Supported ODF Features ==
-# * Headings
-# * Paragraph indentation
-# * Font changes including family, weight, slant, superscript, subscript
-# * Text color (forground and background)
-# * Tables with borders and padding
-# * Lists
-# * Hyperlinks
-# * Raster images in JPEG, GIF, and PNG formats
-# * SVG drawings
+# == Adjustements for the Web ==
 #
-# == Not Yet Supported ==
+# A few CSS tricks improve reading on small screens. For one, the margins
+# are cut from 1/2" to 1/8" for narrow screens. Second, multi-column layout
+# is disabled for narrow screens.
 #
-# * Page background color
-#
-# == No Plans to Support ==
-#
-# * Embedded openoffice drawings (use SVG instead)
-#
-# == Audio and Video Player Hacks ==
+# == Hyperlinks to Audio and Video Player Files ==
 #
 # If the target attribute of a hyperlink is "player", then it will be played in
-# the player. For audio Odt2html will check to be sure you have both MP3 and
-# OGG versions of the file. For video both MP4 and WEBM versions are required.
+# a popup player.
 #
-# Table cells which contain foreign language phrases can be made to play
-# audio files when they are clicked. To activate this feature create a
-# user defined variable in the document properties called "TD Sound". The
-# value should contain a colon. To the left put the language code (two
-# characters). To the right put the directory (relative to the output
-# directory) where the audio files can be found. Any <TD> containing
-# text in that language will be linked to an audio file in that directory.
+# The audio player takes the form of a horizontal bar at the bottom of the
+# screen which contains an HTML 5 <audio> element, a menu of download links,
+# and a close button. If the URL of the audio file is specified without an
+# extension, then Odt2html will check to be sure you have both .mp3 and .ogg
+# versions of the file and will produce a <source> element for each.
+#
+# The video player also pops up at the bottom of the screen. The size of the
+# video player is 640x480 unless the window is narrower in which case it will
+# be 480x360 or 320x240. If the URL is specified without an extension, then
+# Odt2html will check to be sure you have both .mp4 and .webm versions and
+# will produce a <source> element for each.
+#
+# == Speaking Table Cells ==
+#
+# Table cells which contain foreign language phrases can be made to play audio
+# files or segements of a single when they are clicked. This is intended for
+# for language phrasebooks.
+#
+# To set a document up for speaking table cells, create a user defined variable
+# in the document properties called "TD Sound" and a type of "Text". The value
+# should actually be two values separated by a colon:
+# * A two-letter language code. If a table cell starts with a run of text marked
+#   as being in this language, it is considered to be an candidate for a speaking
+#   table cell.
+# * A file system path relative to the ODT file. It should point either to a
+#   directory or to an Audacity labels file with an extension of .txt.
+#   * directory: must contain audio files in both MP3 and OGG format with names
+#     matching the text
+#   * Audacity labels file: must contain labels that match the text in the same
+#     order as in the ODT file
+# If the text in a table cell (though of the correct language) does not match
+# a file in the directory specified or does not match the next message in the
+# Audacity labels file specified, it will be skipped and will not speak.
 #
 
 #=============================================================================
