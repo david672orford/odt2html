@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014--2016, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 1 April 2016
+# Last modified: 19 December 2016
 
 #=============================================================================
 # To the User
@@ -16,22 +16,39 @@
 # 
 # odt2html [--debug] [--force] [--epub] <filename.odt>...
 #
-#  --debug  print debug messages
-#  --force  regenerate the output file even if the input file is not newer
-#  --epub   break the output into one HTML file per section and wrap them
-#           in an EPUB file
+#  --debug               print debug messages
+#  --force               regenerate the output file even if the input file is
+#                        not newer
+#  --epub                break the output into one HTML file per section and
+#                        wrap them in an EPUB file
+#  --template=<filename>
+#  --snobject            add tags to make article a social media object
 #
 # Each input ODT file is converted to a single HTML or EPUB file. The output
 # file will have the same base name and will be placed in the same directory.
 #
 # == Preparing Documents for Conversion ==
 #
-# This program is designed as part of a document preparation workflow which
-# prepares documents both for printing and for the web. In other words, it
-# is designed to convert documents which you carefully prepare with the
-# limitations of the HTML format in mind. They must avoid things such as tabs
-# which cannot be represented in HTML without hacks and they must have clean
-# and correct formatting which does not break when the page is resized.
+# This program is intended to be part of a 'document preparation workflow'.
+# It can produce the web version of an ODF of document which you have
+# carefully prepared so that it will reflow properly and does not contain
+# any formatting which cannot be represented using straigh-forward HTML
+# and CSS.
+#
+# When you format a document you are giving instructions to the word processor
+# which tell it how to lay the elements out on a page. A common poor practice
+# is to nudge the elements into their proper positions by adding and removing
+# spaces and carriage returns. Such formatting breaks if the page size is
+# changed or if material is added or removed. In contrast good formatting
+# expresses the writer's intent in terms the word processor can understand
+# such as "keep these paragraphs together if at all possible" or "do not
+# break the line at this space".
+#
+# Since web pages can be resized almost without limit, it goes without saying
+# that you must use good formatting in your ODF files. What is not so obvious
+# is that you must add additional formatting for the document to remain
+# readable during extreme resizing such as when it is displayed on a mobile
+# telephone.
 #
 # Some examples of formatting problems which you should correct:
 #
@@ -48,18 +65,19 @@
 #   the borders off if you wish.
 #
 # * Extra spaces which may have been inserted to adjust line breaking will
-#   probably not work in the HTML version. Even if it does, it will break
-#   when the window size is adjusted. Instead insert an explicit line break
-#   or use non-breaking spaces to prevent a line break at an undesireable
-#   place.
+#   probably not produce the result you intended when the ODF file is
+#   converted to HTML. Even if it does, it will break when the window size is
+#   adjusted. Instead insert an explicit line break (shift-enter in
+#   Openoffice) or use non-breaking spaces to prevent a line break at an
+#   undesireable place.
 #
 # * Likewise, extra carriage returns (empty paragraphs) inserted to move a
 #   page break will cause problems. There are no pages in a web browser
-#   window and the extra space will be a visual distraction. Go into
-#   paragraph formatting and in the Text Flow tab put a checkmark next to
-#   "Keep with next paragraph". This not only get rid of the spurious
-#   vertical space, but it will fix the bad break permanently in the print
-#   and PDF versions.
+#   window and so the the extra space will only make a mess. Instead in
+#   Openoffice go into paragraph formatting and in the Text Flow tab put a
+#   checkmark next to "Keep with next paragraph". This not only get rid of
+#   the spurious vertical space, but it will fix the bad break permanently in
+#   the print and PDF versions.
 #
 # * If you have indented single-line paragraphs using spaces or tabs, perhaps
 #   to represent a verse from a poem, you should reformat them to use a left
@@ -68,7 +86,7 @@
 #
 # * Watch out for superscripts and subscripts. In Openoffice there are
 #   ways to put regular text inside a span of superscript or subscript
-#   text. This will not work in HTML. Writing code to unnest the spans
+#   text. HTML has no provision for this. Writing code to unnest the spans
 #   would be tricky, so we just warn you about it and expect you to fix
 #   it in the source document. Select the text in question, chose 
 #   Format->Clear Direct Formatting, and then select the parts which should
@@ -93,14 +111,11 @@
 # * SVG drawings
 # * Multiple columns
 #
-# == Not Yet Supported ==
-#
-# * Page background color
-#
 # == No Plans to Support ==
 #
 # * Embedded openoffice drawings (use SVG instead)
-# * Tabs
+# * Tabs (not supported in HTML)
+# * Individual column widths in multi-column sections (not supported in HTML)
 #
 # == Inter-Document Hyperlinks ==
 #
@@ -178,19 +193,31 @@
 # * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
 # * https://code.google.com/p/python-epub-builder/
 #
+# == Social Networking ==
+# * https://developers.google.com/+/web/snippet/
+# * https://developers.google.com/structured-data/testing-tool/
+#
 # == TODO ==
-# * Convert default paragraph style
-# * Convert List styles
+# * Mixed ordered/unordered lists are not implemented. Should they be?
 # * Implement document background color
-# * Figure out what bookmarks are and whether we should implement them
-# * Drop page numbers from table of contents
-# * Test with weird files from Google Docs
-# * Implement right alignment of tables
-# * Reimplement style simplification so that it will simplify more and maybe
-#   we can get rid of the options. Paragraph styles which are functionally
-#   the same as their parents should be eliminated. Table cell borders should
-#   be simplified only if they are all the same.
+# * Convert default paragraph style
+# * Implement alignment of tables to right document margin
+# * Implement more image placement possibilities
+# * Reimplement style simplification:
+#   * Simplify more to make the CSS smaller
+#   * It would be nice if we no longer needed to provide options
+#   * Paragraph styles which are functionally the same as their parents
+#     should be eliminated
+#   * Table cell borders should be simplified only if they are all the same.
+# * Figure out what ODF bookmarks are and whether we should implement them
+# * Drop page numbers from table of contents since they will be wrong even if
+#   the HTML file is printed from a browser
 # * Finish alphabetical index extraction
+# * Table styles collide with paragraph styles. To demonstrate, try naming a
+#   table "Heading".
+# * Add support for HLS video
+# * Playing of audio fragments may not work on some browsers if the file is
+#   not encoded with a constant bitrate. Detect this automatically.
 #
 
 import zipfile
@@ -198,6 +225,7 @@ import sys
 import os
 import lxml.etree as ET
 from lxml.builder import E
+import lxml.html
 import urllib
 import re
 import textwrap
@@ -210,6 +238,12 @@ import codecs
 # ODT to HTML Converter
 #============================================================================
 class Odt2HtmlOptions(object):
+	debug = False						# --debug
+	output_format = "html"
+	template = None						# --template=
+	snobject = False					# --snobject
+	player_lib_dir = '../lib/odt2html'	# --player-lib-dir=
+
 	# If False, then only one HTML file will be generated.
 	# If True, then one HTML file will be generated for
 	# each top-level <text:section>.
@@ -245,36 +279,48 @@ class Odt2HtmlOptions(object):
 	# cells.
 	simplify_table_borders = True
 
+	# Take tables which contain "Box" in their names and turn them into
+	# wrappable containers of boxes.
+	wrap_tables = True
+
 class Odt2Html(object):
-	def __init__(self, odt_filename, output_filename, output_format, debug):
+	def __init__(self, odt_filename, output_filename, opts=None):
 		self.odt_filename = odt_filename
-		self.output_format = output_format
-		self.debug = debug
-		self.opts = Odt2HtmlOptions()
+		self.opts = opts if opts else Odt2HtmlOptions()
 
 		self.output_dirname = os.path.dirname(output_filename)		# directory of output file
 		if self.output_dirname == "":
 			self.output_dirname = "."
-		self.player_lib_dir = '../lib/odt2html'						# location of player resource files
-		self.td_sound_lang = None									# language which should trigger search for sound files
-		self.td_sound_finder = None									# class for finding sound file URLs
+
+		self.td_sound = None										# speaking table cells
 
 		self.depth = 0				# recursion level
-		self.section_count = 0		# current top-level section
+		self.section_count = None	# current top-level section
 		self.subdocs_by_href = {}	# sections which represent child documents
 		self.title = None			# document title
+		self.title_el = None
 		self.h1s = []				# level 1 headings
 		self.images = []			# images to include in .epub file
 		self.player_loaded = False	# Does this document use an audio or video player?
 
-		if output_format == "html":
+		if self.opts.output_format == "html":
 			self.load_and_convert()
-			self.add_nav()
+			if self.td_sound:
+				self.enable_td_sound()
+			if self.opts.wrap_tables:
+				self.wrap_tables()
+			if self.opts.template:
+				self.add_template()
+			if self.opts.snobject:
+				self.add_schema_article()
+				self.add_opengraph()
+			self.embed_stylesheet()
 			self.save_html(output_filename)
-		elif output_format == "epub":
+		elif self.opts.output_format == "epub":
 			self.opts.use_data_urls = False
 			self.opts.keep_toc = False
 			self.opts.split_by_sections = True
+			self.opts.use_html5 = False
 			#self.opts.svg2png = True
 			self.load_and_convert()
 			self.save_epub(output_filename)
@@ -288,7 +334,7 @@ class Odt2Html(object):
 	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
 		self.odt = zipfile.ZipFile(self.odt_filename)
-		if self.debug:
+		if self.opts.debug:
 			print "===== ODT File Contents ====="
 			for resource_filename in self.odt.namelist():
 				print "  %s" % resource_filename
@@ -300,10 +346,7 @@ class Odt2Html(object):
 		meta_xml = self.load_xml("meta.xml")
 
 		# Parse the styles from styles.xml and content.xml
-		self.styles = OdtStyle2Css(
-			self.debug,
-			self.opts
-			)
+		self.styles = OdtStyle2Css(self.opts)
 		for font_face_decls in (
 			styles_xml.xpath("/document-styles/font-face-decls")[0],
 			content_xml.xpath("/document-content/font-face-decls")[0],
@@ -332,7 +375,8 @@ class Odt2Html(object):
 				self.title = self.element_extract_text(headings[0])
 		if self.title is None:
 			raise OdfNotSupported("No document title")
-		self.html_head.append(E.title(self.title))
+		self.title_el = E.title(self.title)
+		self.html_head.append(self.title_el)
 
 		# Search for the description of the document
 		subjects = meta_xml.xpath("/document-meta/meta/subject")
@@ -344,16 +388,13 @@ class Odt2Html(object):
 		if len(keywords) > 0:
 			self.html_head.append(E.meta({'name':'keywords','content':",".join(map(lambda keyword: keyword.text, keywords))}))
 
-		# Look odt2html configuration items in the document user data.
+		# Look for odt2html configuration items in the document user data.
 		for variable in meta_xml.xpath("/document-meta/meta/user-defined"):
 			name = variable.attrib.get("name")
 			if name == "TD Sound":
-				self.td_sound_lang, td_sound_path = variable.text.split(":")
-				m = re.match(r'^(.+)\.txt$', td_sound_path)
-				if m:
-					self.td_sound_finder = LabelSoundFinder(self.output_dirname, m.group(1))
-				else:
-					self.td_sound_finder = DirSoundFinder(self.output_dirname, td_sound_path)
+				self.td_sound = variable.text
+			else:
+				pass
 
 		# Get a pointer to the ODT document body.
 		odt_body = content_xml.xpath("/document-content/body/text")[0]
@@ -366,13 +407,13 @@ class Odt2Html(object):
 		# Pass 2: convert the document and append it to the HTML body
 		self.section_count = 0
 		for odt_el in odt_body:
-			self.convert_element(odt_el, self.html_body)
+			self.convert_element(odt_el, self.html_body, None)
 
 		# Convert the footer and add it to the body
 		odt_footer = styles_xml.xpath("/document-styles/master-styles/master-page[@name='Standard']/footer/p")
 		if len(odt_footer) >= 1:
 			html_footer = E.div({"class":"footer"})
-			self.convert_element(odt_footer[0], html_footer)
+			self.convert_element(odt_footer[0], html_footer, None)
 			self.html_body.append(E.footer(html_footer))
 
 		# Do post-processing on table cells.
@@ -405,26 +446,11 @@ class Odt2Html(object):
 				if td.text is None or len(td.text) < 25:		# unwrap short <td>'s
 					td.tail = ""
 
-			# Speaking table cells
-			# FIXME: would it be neater if this were done during the conversion from ODF to HTML?
-			if self.td_sound_lang is not None:
-				for el in ((td,) + tuple(td)):		# Iterate through the <TD> and its immediate children
-					if el.attrib.get("lang") == self.td_sound_lang:
-						text = self.get_text_content(el).strip()
-						if text:
-							url = self.td_sound_finder.find(text)
-							if url:
-								self.require_player()
-								td.attrib['onclick'] = 'bgplay("%s")' % url
-								td.attrib['class'] = "play " + td.attrib.get('class','')
-							print u"  %s TD: %s %s" % (self.td_sound_lang, text, "OK" if url else "Missing")
-							break
-
 	#============================================================================
 	# Load one of the XML files embedded in the ODT file
 	#============================================================================
 	def load_xml(self, filename):
-		if self.debug:	
+		if self.opts.debug:	
 			print "===== %s =====" % filename
 
 		tree = ET.parse(self.odt.open(filename))
@@ -440,31 +466,11 @@ class Odt2Html(object):
 				del el.attrib[name]
 				el.attrib[short_name] = value
 
-		if self.debug:
+		if self.opts.debug:
 			#print ET.tostring(tree, pretty_print=True, encoding="utf-8").decode("utf-8")
 			print ET.tostring(tree, pretty_print=True, encoding="unicode")
 
 		return tree
-
-	#============================================================================
-	# Image handling
-	#============================================================================
-
-	# Request the addition of an image to the output document.
-	# Returns either a data: URL or the path which the image
-	# will occupy in the output file tree.
-	def add_image(self, filename):
-		image = Odt2HtmlImage(self.odt, filename, self.opts.svg2png)
-
-		if self.opts.use_data_urls:
-			# http://www.websiteoptimization.com/speed/tweak/inline-images/
-			image_data = image.get_data(pretty_print=False)
-			#print "  Data URL for %s: %d bytes" % (image.filename, len(image_data))
-			#return "data:%s;base64,%s" % (image.mimetype, urllib.quote(image_data.encode("utf-8").encode("base64")))
-			return "data:%s;base64,%s" % (image.mimetype, image_data.encode("base64"))
-		else:
-			self.images.append(image)
-			return image.filename
 
 	#============================================================================
 	# Pass 1
@@ -473,15 +479,20 @@ class Odt2Html(object):
 		# Collect the source file names of the subdocuments of a master document.
 		# We need this information in order to resolve links between subdocuments.
 		if odt_el.tag == "section":
-			self.section_count += 1
+			section_id = self.get_section_id(odt_el)
 			subdoc_href = self.get_section_source_href(odt_el)
 			if subdoc_href is not None:
-				#print self.section_count, subdoc_href
-				self.subdocs_by_href[subdoc_href] = self.section_count
+				self.subdocs_by_href[subdoc_href] = section_id
 
-	# If this section encloses a subdocument of a master document,
-	# return a href to the subdocument with the extension changed
-	# to ".html".
+	def get_section_id(self, odt_el):
+		self.section_count += 1
+		if 'name' in odt_el.attrib:
+			return odt_el.attrib['name'].replace(" ","_")
+		else:
+			return "topsect%d" % self.section_count
+
+	# If this section encloses a subdocument of a master document, return an
+	# href to the subdocument with the extension changed to ".html".
 	def get_section_source_href(self, odt_el):
 		if odt_el.attrib.get("protected","false") != "true":
 			return None
@@ -494,12 +505,14 @@ class Odt2Html(object):
 		return self.href_to_html(href)
 
 	#============================================================================
+	# Pass 2
+	#============================================================================
+
 	# This function converts an ODT element to HTML and adds it to the
 	# parent HTML element specified. It then calls itself on each child
 	# of the ODT element with the newly created HTML element as the 
 	# target parent.
-	#============================================================================
-	def convert_element(self, odt_el, html_parent_el):
+	def convert_element(self, odt_el, html_parent_el, list_style_name):
 		convert_children = True
 
 		style_name = odt_el.attrib.get('style-name')
@@ -507,28 +520,28 @@ class Odt2Html(object):
 		if odt_el.tag == "sequence-decls":		# mystery
 			html_el = None
 		elif odt_el.tag == "section":
-			if self.debug:
+			if self.opts.debug:
 				print "  Section:", odt_el.attrib.get("name")
 			html_el = E.div()
-			if self.depth == 0:
-				self.section_count += 1
+			if self.depth == 0:					# if at master document level
+				section_id = self.get_section_id(odt_el)
 				subdoc_href = self.get_section_source_href(odt_el)
 				if subdoc_href:					# if this is a child of a master document,
-					if self.section_count != self.subdocs_by_href[subdoc_href]:
-						raise AssertionError
-				html_el.attrib["id"] = "topsect%d" % self.section_count
+					if self.section_count != self.subdocs_by_href[subdoc_href] != subdoc_id:
+						raise OdfInvalid("Master document inconsistency")
+				html_el.attrib["id"] = section_id
+			else:
+				html_el.attrib["id"] = odt_el.attrib['name'].replace(" ","_")
 		elif odt_el.tag == "section-source":	# handled during pass 1
 			html_el = None
 		elif odt_el.tag == "h":
-			if self.debug:
+			if self.opts.debug:
 				print "  Heading:", self.element_extract_text(odt_el), style_name
 			level = int(odt_el.attrib['outline-level'])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
 
 				if style_name and style_name.startswith("P"):
-					# Do not remember why this is bad
-					#raise AssertionError("Level 1 heading with paragraph style: %s" % style_name)
 					print "  Warning: level 1 heading with paragraph style: %s" % style_name
 
 				bookmarks = odt_el.xpath("./bookmark-start")
@@ -551,6 +564,8 @@ class Odt2Html(object):
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
 			# it will move away from the bullet.
+			# FIXME: Does this have something to do with the style rule:
+			#        LI, P { position: relative }
 			if html_parent_el.tag == "li" and self.element_empty(html_parent_el):
 				html_el = html_parent_el
 			else:
@@ -609,11 +624,12 @@ class Odt2Html(object):
 			html_el = None						# don't convert
 
 		elif odt_el.tag == "list":
-			if style_name is not None and "Num" in style_name:
+			if style_name:
+				list_style_name = style_name
+			if self.styles.styles_byname[list_style_name].tag == "OL":
 				html_el = E.ol()
 			else:
 				html_el = E.ul()
-			style_name = None					# FIXME: list style not implemented
 		elif odt_el.tag == "list-header":
 			raise OdfNotImplementedYet("list-header")
 		elif odt_el.tag == "list-item":
@@ -654,7 +670,7 @@ class Odt2Html(object):
 		elif odt_el.tag == "annotation":		# user note
 			html_el = None
 
-		# forms not implemented
+		# Forms not really implemented. All we do is draw a box for each control.
 		elif odt_el.tag == "forms":
 			html_el = None
 		elif odt_el.tag == "control":
@@ -665,7 +681,8 @@ class Odt2Html(object):
 					)}
 				)
 
-		else:									# unimplemented but not supressed
+		# Unimplemented ODF tag
+		else:
 			#print "  Warning: unimplemented tag: %s" % odt_el.tag
 			#html_el = E.span()
 			raise OdfNotImplementedYet("unimplemented tag: %s" % odt_el.tag)
@@ -694,7 +711,7 @@ class Odt2Html(object):
 				# Call this function recursively to convert the children.
 				for child in odt_el:
 					self.depth += 1
-					self.convert_element(child, html_el)
+					self.convert_element(child, html_el, list_style_name)
 					self.depth -= 1
 
 				# Now run through the children collapsing the unnecessary spans
@@ -702,9 +719,6 @@ class Odt2Html(object):
 				prev_child = None
 				for child in html_el:
 					#print child, child.text, child.tail, child.attrib
-
-					if child.tag == "span" and ( child.text == u"\u0301" or child.text == u"\u0301" ):
-						print "  Warning: spurious stress mark span"
 
 					if prev_child is not None \
 							and child.tag == "span" and prev_child.tag == "span" \
@@ -721,7 +735,15 @@ class Odt2Html(object):
 
 					else:
 						prev_child = child
-	
+
+				# Look for spans containing only a stress mark. Since the stress mark is
+				# a combining character, putting it alone in a span does not make any
+				# sense. It also will not be rendered correctly on iPad browsers.
+				for child in html_el:
+					if child.tag == "span" and child.text == u"\u0301":
+						#raise OdtBadFormatting("Spurious stress mark span")
+						print "  Warning: spurious stress mark span"
+
 			# If a <P> tag is completely empty, put a <BR> tag into it because
 			# in HTML 4 empty <P> tags are supposed to be ignored.
 			if odt_el.tag == "p" and self.element_empty(html_el):
@@ -773,38 +795,59 @@ class Odt2Html(object):
 					html_parent_el.append(copy.deepcopy(html_el))
 
 	def convert_hyperlink(self, odt_el):
+		assert odt_el.tag == 'a'
 		href = odt_el.attrib["href"]
 		target = odt_el.attrib.get("target-frame-name")
 		title = odt_el.attrib.get("name","")
 
-		# We implement a target called "player" which opens a media file in a popup player.
-		# This is not part of the Odf specification, but is not really a hack either.
+		# We provide a special target called "player" which opens a media file
+		# in a popup player. This is not part of the ODF specification, but is
+		# not really a hack either since the purpose of "target" is to specify
+		# the place where the media should be displayed.
 		if target == "player":
 			filename = urllib.unquote(odt_el.attrib["href"])
+			webvtt_url = None
+			player_id = None
 
-			if filename.startswith("../"):
+			if filename.startswith("../"):		# on same server
 				m = re.match(r"^\.\./(.+)(\.[^\./]+)$", filename)
 				if not m:
 					raise OdtBadPlayer(filename)
 				filename = m.group(1)
 				extension = m.group(2)
-				
-				if extension == ".mp3" or extension == ".ogg":
-					extensions = ("mp3","ogg")
+
+				# Based on the extension, figure out what other extensions should
+				# be present and whether this is an audio or a video program.
+				if extension == ".ogg" or extension == ".mp3":
+					extensions = ("ogg", "mp3")
 					player = "play_audio"
-				elif extension == ".mp4" or extension == ".webm":
-					extensions = ("mp4","webm")
+				elif extension == ".webm" or extension == ".mp4":
+					extensions = ("webm", "mp4")
 					player = "play_video"
 				else:
 					raise OdfBadPlayer("extension not supported: %s.%s" % (filename, extension))
-	
+
+				# Make sure the file is present with all of the required extensions.
 				for extension in extensions:
 					test_filename = ("%s/%s.%s" % (self.output_dirname, filename, extension))
-					# FIXME: file system encoding might not be UTF-8
-					if not os.path.exists(test_filename.encode("utf-8")):
+					if not os.path.exists(self.encode_filename(test_filename)):
 						raise OdfBadPlayer("Missing %s file: \"%s\"" % (extension, test_filename))
 
-				url = urllib.quote(filename.encode("utf-8"))
+				# The first extension listed is the one we will feed to the player.
+				# It knows about the others.
+				url = urllib.quote(("%s.%s" % (filename, extensions[0])).encode("utf-8"))
+
+				filename = re.sub(r'\s+\d+x\d+$', '', filename)		# remove " 640x480"
+				test_filename = ("%s/%s.vtt" % (self.output_dirname, filename))
+				if self.opts.debug:
+					print "  Webvtt:", test_filename
+				if os.path.exists(self.encode_filename(test_filename)):
+					webvtt_url = urllib.quote(("%s.vtt" % filename).encode("utf-8"))
+
+				frames = odt_el.xpath('./frame')
+				assert len(frames) == 1
+				name = frames[0].attrib['name']
+				player_id = name[4:] if name.startswith('Play') else None
 
 			elif filename.startswith("http://") and filename.endswith(".mp4"):
 				player = "play_video"
@@ -815,13 +858,13 @@ class Odt2Html(object):
 				url = filename
 
 			else:
-				OdfNotSupported("Unsupported URL: %s" % filename)
+				raise OdfNotSupported("Unsupported URL: %s" % filename)
 
 			self.require_player()
 
 			html_el = E.span({
 				'class':'play_link',
-				'onclick':'%s("%s","%s")' % (player, url, title),
+				'onclick':'%s("%s","%s",%s,%s)' % (player, url, title, self.js_arg(webvtt_url), self.js_arg(player_id))
 				})
 
 		# Other target
@@ -839,14 +882,15 @@ class Odt2Html(object):
 					if self.opts.split_by_sections:
 						href = "content%s.html" % self.subdocs_by_href[href_html]
 					else:
-						href = "#topsect%s" % self.subdocs_by_href[href_html]
+						href = "#%s" % self.subdocs_by_href[href_html]
 				else:
 					# Make sure the file named (likely an ODT or HTML file) exists
 					href = href[3:]
 					fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href))
 					# FIXME: file system encoding might not be UTF-8
 					if os.path.exists(fs_path.encode("utf-8")):
-						print "  href: %s" % fs_path
+						#print "  href: %s" % fs_path
+						pass
 					else:
 						print "  Warning: broken link: %s" % fs_path
 					# Whether it exists or not, point to the HTML version
@@ -864,6 +908,16 @@ class Odt2Html(object):
 		html_el.tail = ""
 		return html_el
 
+	def encode_filename(self, filename):
+		# FIXME: file system encoding might not be UTF-8
+		return filename.encode("utf-8")
+
+	def js_arg(self, arg):
+		if arg is None:
+			return "null"
+		else:
+			return '"%s"' % arg
+
 	# If a frame contains an image, convert it to an <img>, otherwise
 	# convert it to a <div>.
 	#
@@ -873,12 +927,14 @@ class Odt2Html(object):
 		odt_images = odt_frame.xpath("./image")
 		if len(odt_images) > 0:
 			href = odt_images[0].attrib['href']
-			html_el = E.img({"src":self.add_image(href)})
+			html_el = E.img({"src": self.add_image(href)})
 			titles = odt_frame.xpath("./title")
 			if len(titles) > 0:
 				html_el.attrib["alt"] = titles[0].text
 			else:
 				print "  Warning: image without alt text"
+			if self.opts.snobject and odt_frame.attrib.get("name") == "sm_image":
+				pass		# FIXME
 		else:
 			html_el = E.div()
 
@@ -893,8 +949,24 @@ class Odt2Html(object):
 		#		style.append('margin-left:%s' % odt_frame.attrib['x'])
 		#	if 'y' in odt_frame.attrib:
 		#		style.append('margin-top:%s' % odt_frame.attrib['y'])
+
 		html_el.attrib['style'] = ";".join(style)
 		return html_el
+
+	# Request the addition of an image to the output document.
+	# Returns either a data: URL or the path which the image
+	# will occupy in the output file tree.
+	def add_image(self, filename):
+		image = Odt2HtmlImage(self.odt, filename, self.opts.svg2png)
+
+		if self.opts.use_data_urls:
+			# http://www.websiteoptimization.com/speed/tweak/inline-images/
+			image_data = image.get_data(pretty_print=False)
+			#print "  Data URL for %s: %d bytes" % (image.filename, len(image_data))
+			return "data:%s;base64,%s" % (image.mimetype, image_data.encode("base64"))
+		else:
+			self.images.append(image)
+			return image.filename
 
 	# Load the audio and video players
 	def require_player(self):
@@ -903,113 +975,196 @@ class Odt2Html(object):
 			self.html_head.append(E.link({
 				'rel':'stylesheet',
 				'type':'text/css',
-				'href':'%s/player-v3.css' % self.player_lib_dir,
+				'href':'%s/player-v8.css' % self.opts.player_lib_dir,
 				}))
 			self.html_head.append(E.script({
 				'type':'text/javascript',
-				'src':'%s/player-v4.js' % self.player_lib_dir,
+				'src':'%s/player-v7.js' % self.opts.player_lib_dir,
 				}))
 			self.player_loaded = True
 
-	# Extract the text content of an element and its children.
-	def get_text_content(self, el):
-		el_text = ""
-		if el.text:
-			el_text += el.text
-		for el in el:
-			if el.text:
-				el_text += el.text
-			if el.tail:
-				el_text += el.tail
-		return el_text
+	#============================================================================
+	# Post processing of generated HTML
+	#============================================================================
+
+	# Embed the CSS stylesheets in the document <head>
+	def embed_stylesheet(self):
+
+		# Style is responsive
+		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
+
+		# The base stylesheet for web browers
+		self.add_css("""\
+			HTML,BODY,H1,H2,H3,H4,H4,P,OL,UL,LI { margin:0; padding:0 }
+			BODY { font-size:12pt }
+			H1,H2,H3,H4,H4 { font-size:inherit }
+			UL,OL { list-style-position:outside }
+			LI,P { position:relative }
+			DIV.restrain { max-width:100% }
+			TABLE { border-collapse:collapse }
+			TH,TD { }
+			DIV.wrap { display:flex; flex-flow:row wrap }
+			DIV.wrap DIV { display: inline-block; margin: 1px; display: flex; flex-direction: column }
+			HR.pagebreak { margin:0.5in }
+			SPAN.space { white-space:pre-wrap }
+			DIV.footer { margin-top:0.2in; font-size:8pt; white-space:nowrap; max-width:100%; overflow:hidden }
+			@media print { @page { margin:0.5in } }
+			@media screen {		/* push down footer */
+				HTML { height:100% }
+				BODY { position:relative; box-sizing:border-box; min-height:100%; margin:0 3%; padding:0.3in 0 0.4in }
+				DIV.footer { position:absolute; left:0; bottom:0.1in; margin:0; }
+				}
+			""")
+
+		# Add the converted styles from the ODT document.
+		self.add_css("\n".join(self.styles.get_css(3.0)))
+
+	# Load a template HTML file and copy some things from it
+	# to the output document.
+	def add_template(self):
+		template = lxml.html.parse(open(self.opts.template))
+
+		# Copy <link>, <style>, and <script> elements from the <head>
+		for el in template.xpath("//head")[0]:
+			if el.tag in ("link", "style", "script"):
+				self.html_head.append(el)
+
+		# If the template has a title, prepend it to the document's title
+		template_title = template.xpath("//head/title")
+		if template_title:
+			template_title = template_title[0].text
+			if template_title:
+				self.title_el.text = "%s: %s" % (template_title, self.title)
+
+		# Copy <nav> elements from the template's body while replacing
+		# the string "TITLE" with the document's title.
+		basename = os.path.splitext(os.path.basename(self.odt_filename))[0]
+		i = 0
+		for template_nav in template.xpath("//body/nav"):
+			for el in ((template_nav,) + tuple(template_nav.xpath(".//*"))):
+				if el.text:
+					el.text = el.text.replace("{{TITLE}}", self.title)
+				if el.tail:
+					el.tail = el.tail.replace("{{TITLE}}", self.title)
+				if "href" in el.attrib:
+					if el.attrib['href'] == "{{ODT}}":
+						el.attrib['href'] = "%s.odt" % basename
+					elif el.attrib['href'] == "{{PDF}}":
+						el.attrib['href'] = "%s.pdf" % basename
+			self.html_body.insert(i, template_nav)
+			i += 1
+
+	# Add schema.org/Article
+	# https://developers.google.com/+/web/snippet/#documentation
+	def add_schema_article(self):
+		self.html_head.attrib['itemscope'] = ''
+		self.html_head.attrib['itemtype'] = 'http://schema.org/Article'
+
+		#self.html_head.append(E.meta({'itemprop':'headline','content':self.title}))
+		self.title_el.attrib['itemprop'] = 'headline'
+
+		descriptions = self.html_head.xpath(".//meta[@name='description']")
+		if len(descriptions) >= 1:
+			descriptions[0].attrib['itemprop'] = 'description'
+
+	# Add Open Graph
+	# http://ogp.me/
+	def add_opengraph(self):
+		self.html_head.attrib['prefix'] = 'og: http://ogp.me/ns#'
+
+		self.html_head.append(E.meta({'property':'og:title','content':self.title}))
+
+		descriptions = self.html_head.xpath(".//meta[@name='description']")
+		if len(descriptions) >= 1:
+			descriptions[0].attrib['property'] = 'og:description'
+
+	# Go through the generated HTML, identify speaking table cells, load the
+	# JavaScript and CSS resources required, and hook the cells up.
+	def enable_td_sound(self):
+		if self.opts.debug:
+			print "Enabling TD sound..."
+		td_sound_lang, td_sound_path = self.td_sound.split(":")
+		m = re.match(r'^(.+)\.txt$', td_sound_path)
+		if m:
+			td_sound_finder = LabelSoundFinder(self.output_dirname, m.group(1))
+		else:
+			td_sound_finder = DirSoundFinder(self.output_dirname, td_sound_path)
+
+		for td in self.html_body.xpath(".//td"):
+			for el in ((td,) + tuple(td)):		# Iterate through the <TD> and its immediate children
+				if el.attrib.get("lang") == td_sound_lang:
+					text = self.element_extract_text(el).strip()
+					if text:
+						url = td_sound_finder.find(text)
+						if url:
+							self.require_player()
+							td.attrib['onclick'] = 'bgplay("%s")' % url
+							td.attrib['class'] = td.attrib.get('class','') + " play"
+						if self.opts.debug:
+							print u"  %s TD: %s %s" % (td_sound_lang, text, "OK" if url else "Missing")
+						break
+
+	# If a table contains the string "Box", convert it to a box of boxes.
+	# To do this we:
+	# * Convert <table> to <div class="wrap">
+	# * Drop <col>, <tr>, and <tbody>
+	# * Convert the <td> elements to <div> elements and reinsert them
+	# FIXME: The way we fix up the styles is a horrible hack which breaks
+	# encapsulation. This was done deliberately because the style system
+	# is a mess in need of a rewrite, so we did not want to implement this
+	# correct without breaking something.
+	def wrap_tables(self):
+		if self.opts.debug:
+			print "Fixing up wrappable tables..."
+		for table in self.html_body.xpath(".//table"):
+			if "Wrap" in table.attrib['class']:
+				if self.opts.debug:
+					print "  %s: wrapping" % table.attrib['class']
+				table.tag = "div"
+				table.attrib['class'] += " wrap"
+				table_css_style = self.styles._by_css_class(table.attrib['class'])
+				table_css_style.template = "DIV.%s"
+				if 'max-width' in table_css_style.properties:
+					del table_css_style.properties['max-width']
+	 			boxes = []
+				for el in table:
+					if el.tag == "tbody":
+						for tr in el:
+							el.remove(tr)
+							css_style = self.styles._by_css_class(tr.attrib.get('class'))
+							if css_style is not None:
+								css_style.template = "DIV.%s > DIV"
+								css_style.name = table_css_style.name
+							for td in tr:
+								tr.remove(td)
+								td.tag = "div"
+								# If there is a style rule for this table cell and it is not yet converted,
+								css_style = self.styles._by_css_class(td.attrib.get('class',None))
+								if css_style is not None and not 'justify-content' in css_style.properties:
+									css_style.template = "DIV.%s"
+									vertical_align = css_style.properties.pop('vertical-align',None)
+									css_style.properties['justify-content'] = {'top':'flex-start','middle':'center','bottom':'flex-end'}.get(vertical_align,'center')
+								boxes.append(td)
+					elif el.tag == "col":
+						css_style = self.styles._by_css_class(el.attrib.get('class'))
+						css_style.template = "DIV.%s > DIV"
+						css_style.name = table_css_style.name
+					table.remove(el)
+				for box in boxes:
+					table.append(box)
+			elif self.opts.debug:
+				print "  %s: no wrapping" % table.attrib['class']
 
 	#============================================================================
 	# Take the HTML BODY object in RAM, wrap it in an HTML element,
 	# added a HEAD, and write it out to disk.
 	#============================================================================
 	def save_html(self, html_filename):
-		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
-
-		# The base stylesheet for web browers
-		css = textwrap.dedent("""\
-			P, LI { position: relative }
-			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
-			BODY { font-size: 12pt }
-			@media print { @page { margin: 0.5in } }
-			@media screen { HTML { height: 100% } BODY { position: relative; box-sizing: border-box; min-height: 100%; margin: 0 3%; padding: 0.3in 0 0.4in } }
-			H1, H2, H3, H4, H4 { font-size: inherit }
-			DIV.restrain { max-width: 100% }
-			TABLE { border-collapse: collapse }
-			UL { margin: 0; padding: 0 0 0 1em; list-style-position: inside }
-			TH, TD { vertical-align: top }
-			HR.pagebreak { margin: 0.5in }
-			SPAN.space { white-space: pre-wrap }
-
-			DIV.footer { margin-top: 0.2in; font-size: 8pt; white-space: nowrap; max-width: 100%; overflow: hidden }
-			@media screen { DIV.footer { position: absolute; left: 0; bottom: 0.1in; margin: 0; } }
-
-			DIV.controls { position: fixed; background-color: white; z-index: 1; }
-			DIV.controls A { display: inline-block; font-size: 11pt; text-decoration: none; padding: .3em; border-style: solid; border-color: black; }
-			@media (max-width: 6in) { DIV.controls A { font-size: 8pt } }
-			@media print { DIV.controls { display: none } }
-			DIV#upbox { top: 0; left: 0; }
-			DIV#dlbox { top: 0; right: 0; }
-			DIV#upbox A { border-width: 0 1px 1px 0; }
-			DIV#dlbox A { border-width: 0 0 1px 1px; }
-			""")
-
-		# Add the converted styles from the ODT document.
-		css += "\n".join(self.styles.get_css(3.0))
-
-		# Insert the CSS styles into the head of the document.
-		style = E.style({"type": "text/css"})
-		style.text = "\n" + re.sub(r"^", r"      ", css, flags=re.MULTILINE) + "\n    "
-		self.html_head.append(style)
-
 		# Write the HTML tree to a file
 		outfh = open(html_filename, "w")
 		outfh.write("<!DOCTYPE HTML>\n")
 		html_elementtree = ET.ElementTree(element=E.html(self.html_head, self.html_body))
 		html_elementtree.write(outfh, encoding="utf-8", pretty_print=True, method="html")
-
-	# Add navigational elements to the top of the page.
-	def add_nav(self):
-		nav_container = E.nav()
-		nav_container.text = "\n"
-		nav_container.tail = "\n"
-		self.html_body.insert(0, nav_container)
-
-		# Box at top left with link to one level up
-		upbox = E.div()
-		upbox.attrib["id"] = "upbox"
-		upbox.attrib["class"] = "controls app_hidden"
-		upbox.append(E.a(u"▲INDEX", {
-			"title":"Return to homepage",
-			"href":"..",
-			"rel":"nofollow",
-			}))
-		upbox[0].tail = ""
-		nav_container.append(upbox)
-
-		# Box to the top-right with links to the PDF and ODT versions of this document.
-		dlbox = E.div()
-		dlbox.attrib["id"] = "dlbox"
-		dlbox.attrib["class"] = "controls app_hidden"
-		basename = os.path.splitext(os.path.basename(self.odt_filename))[0]
-		dlbox.append(E.a(u"▼PDF", {
-			"title":"Download this page as a PDF file for high-quality printing",
-			"href":"%s.pdf" % basename,
-			"type":"application/pdf",
-			"rel":"nofollow",
-			}))
-		dlbox.append(E.a(u"▼ODT", {
-			"title":"Download this page as an Opendocument word processing file",
-			"href":"%s.odt" % basename,
-			"type":"application/vnd.oasis.opendocument.text",
-			"rel":"nofollow",
-			}))
-		dlbox[0].tail = ""		# supress newline after first </a> when pretty_print==True
-		nav_container.append(dlbox)
 
 	#============================================================================
 	# Create an EPUB file. An EPUB file is a zip file containing:
@@ -1145,13 +1300,13 @@ class Odt2Html(object):
 		# The base CSS stylesheet for ebook readers. Remember that
 		# this is CSS 2.1, so no @media queries.
 		css = textwrap.dedent("""\
-			P, LI { position: relative }
-			HTML, BODY, H1, H2, H3, H4, H4, P { margin: 0; padding: 0 }
+			HTML, BODY, H1, H2, H3, H4, H4, P, UL, LI { margin: 0; padding: 0 }
 			BODY { margin: 0.125in; font-size: 12pt }
 			H1, H2, H3, H4, H4 { font-size: inherit }
-			UL { margin: 0; padding: 0 0 0 1em; list-style-position: inside }
+			UL, OL { list-style-position: outside }
+			LI, P { position: relative }
 			TABLE { border-collapse: collapse }
-			TH, TD { vertical-align: top }
+			TH, TD { }
 			HR.pagebreak { margin: 0.5in -0.5in 0.5in -0.5in }
 			SPAN.space { white-space: pre-wrap }
 			""")
@@ -1204,15 +1359,15 @@ class Odt2Html(object):
 		return text
 
 	#============================================================================
-	#
+	# Utility functions
 	#============================================================================
 
 	# Is this element empty of text and children?
 	def element_empty(self, el):
 		return el.text is None and el.tail is None and len(list(el)) == 0
 	
-	# Extract text from an ODT element and its children. Throw away
-	# any formatting.
+	# Extract text from an ODT element and its children.
+	# Throw away any formatting.
 	def element_extract_text(self, el):
 		text = ""
 		if el.text is not None:
@@ -1228,9 +1383,17 @@ class Odt2Html(object):
 	def href_to_html(self, href):
 		return re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)
 
+	# Insert CSS styles into the head of the document.
+	def add_css(self, css):
+		style = E.style({"type": "text/css"})
+		style.text = "\n" + re.sub(r"^\s*", r" ", css, flags=re.MULTILINE) + "\n"
+		self.html_head.append(style)
+
 #============================================================================
 # These classes take ODF stylesheets and convert them to CSS stylesheets.
 #============================================================================
+
+# Represents a style rule
 class CssStyle(object):
 	def __init__(self, name):
 		self.name = name			# name for ODF file
@@ -1242,20 +1405,52 @@ class CssStyle(object):
 		self.subst = None			# is this the same as some other style?
 		self.break_before = None	# "page" for page break before
 		self.language = None		# not CSS, but where else can we put this?
-	def hashable(self):
-		if self.simplified_td:
-			return (self.template % self.className(), str(self.properties))
-		else:
-			return (self.template, str(self.properties))
 	def set_parent(self, parent):
 		self.properties.update(parent.properties)
 		self.media = parent.media
 		self.break_before = parent.break_before
 		self.language = parent.language
-	def className(self):			# name converted to legal CSS class name
-		return self.name.replace('.','_')
 	def __unicode__(self):
 		return "%s %s" % (self.template % self.className(), str(self.properties))
+	def className(self):			# name converted to legal CSS class name
+		return self.name.replace('.','_')
+	def hashable(self):
+		if self.simplified_td:
+			return (self.template % self.className(), str(self.properties))
+		else:
+			return (self.template, str(self.properties))
+	def get_text(self, css_version):
+		style_text = "%s{%s}" % (
+			self.template % self.className(),
+			";".join(["%s:%s" % (name, value) for name, value in self.properties.items()])
+			)
+		if self.media is not None and css_version >= 3.0:
+			style_text = "@media %s { %s }" % (
+				self.media,
+				style_text
+				)
+		return style_text
+
+class CssListStyle(CssStyle):
+	def __init__(self, name):
+		CssStyle.__init__(self, name)
+		self.tag = None
+		self.levels = []
+	def add_level(self, level, indentation):
+		self.levels.append(indentation)
+		assert len(self.levels) == level, "Incorrect levels in list style %s" % self.name
+	def __unicode__(self):
+		return "%s.%s: " % (self.tag, self.name) + ", ".join(self.levels)
+	def hashable(self):
+		return (self.tag, self.levels)
+	def get_text(self, css_version):
+		css_text = []
+		css_text.append("%s.%s LI{margin-left:0;text-indent:0}" % (self.tag, self.name))
+		count = 0
+		for level in self.levels:
+			css_text.append("%s.%s" % (self.tag, self.name) + (" %s" % self.tag) * count + "{padding-left:%s}" % level)
+			count += 1
+		return "\n".join(css_text)
 
 class OdtStyle2Css(object):
 	# Generic font names in ODF are different from those in CSS!
@@ -1266,16 +1461,15 @@ class OdtStyle2Css(object):
 		"script":"cursive",
 		}
 
-	def __init__(self, debug, opts):
-		self.debug = debug
+	def __init__(self, opts):
 		self.opts = opts
 
 		self.dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
 		self.fonts = {}
-		self.styles_ordered = []		# it may be nice to preserve the original order
-		self.styles_byselector = {}		# for inclusion of parent styles
-		self.styles_byname = {}
-		self.styles_byhashable = {}
+		self.styles_ordered = []		# preserves original order (really necessary?)
+		self.styles_byselector = {}		# by tag and class (for inclusion of parent styles)
+		self.styles_byname = {}			# by name from ODT file
+		self.styles_byhashable = {}		# for dedupping
 
 	# When you find the <font-face-decls>, pass it to this function.
 	def add_fonts(self, odt_font_face_decls):
@@ -1299,7 +1493,7 @@ class OdtStyle2Css(object):
 	# When one of the styles tags (of which there are several) is found,
 	# it is passed to this function.
 	def add_stylesheet(self, odt_stylesheet):
-		if self.debug:
+		if self.opts.debug:
 			print "===== Converting ODF Stylesheet ====="
 
 		# Make first pass.
@@ -1313,7 +1507,7 @@ class OdtStyle2Css(object):
 			if not self.add_style(style):
 				raise OdfInvalid("missing parent for style: %s %s" % (style.tag, style.attrib))
 
-		if self.debug:
+		if self.opts.debug:
 			print
 
 	# Take an ODF stylesheet tag and its children and add them to the HTML
@@ -1321,7 +1515,7 @@ class OdtStyle2Css(object):
 	# Returns True if the style's dependencies (if any) were fulfilled and it
 	# has been added to the HTML document's stylesheet.
 	def add_style(self, odt_style):
-		if self.debug:
+		if self.opts.debug:
 			print "  %s %s" % (odt_style.tag, odt_style.attrib)
 
 		if odt_style.tag == "style":
@@ -1342,8 +1536,9 @@ class OdtStyle2Css(object):
 				simplifiable = True
 				for el in odt_style:
 					if el.tag == "table-cell-properties":
-						if 'vertical-align' in el.attrib and el.attrib['vertical-align'] != "middle":
-							css_style.properties['vertical-align'] = el.attrib['vertical-align']
+						vertical_align = el.attrib.get('vertical-align','middle')
+						if vertical_align != 'middle':
+							css_style.properties['vertical-align'] = vertical_align
 							simplifiable = False
 				if self.opts.simplify_table_borders and simplifiable:
 					css_style.template = "TABLE.%s TD"
@@ -1355,19 +1550,22 @@ class OdtStyle2Css(object):
 				css_style.template = "IMG.%s"
 				for el in odt_style:
 					if el.tag == "graphic-properties":
-						value = el.attrib.get('horizontal-pos')
-						if value in ('left', 'right'):
-							css_style.properties['float'] = value
-						elif value == 'from-left':							# FIXME: what is this really supposed to do?
-							css_style.properties['float'] = 'right'
-						elif value == 'center':
-							css_style.properties['display'] = 'block'
-							css_style.properties['margin-left'] = 'auto'
-							css_style.properties['margin-right'] = 'auto'
+						if el.attrib.get('vertical-rel') == 'baseline':
+							pass
+						else:
+							horizontal_pos = el.attrib.get('horizontal-pos')
+							if horizontal_pos in ('left', 'right'):
+								css_style.properties['float'] = horizontal_pos
+							#elif horizontal_pos == 'from-left':							# FIXME: what is this really supposed to do?
+							#	css_style.properties['float'] = 'right'
+							elif horizontal_pos == 'center':
+								css_style.properties['display'] = 'block'
+								css_style.properties['margin-left'] = 'auto'
+								css_style.properties['margin-right'] = 'auto'
 			elif style_family == "section":
 				css_style.template = "DIV.%s"
 			else:
-				if self.debug:
+				if self.opts.debug:
 					print "    unimplemented style family: %s" % style_family
 				return True
 
@@ -1376,17 +1574,17 @@ class OdtStyle2Css(object):
 			if parent_style_name is not None:
 				parent_style = self.styles_byselector.get((css_style.template,parent_style_name))
 				if parent_style is None:
-					if self.debug:
+					if self.opts.debug:
 						print "    deferring loading"
 					return False
 				css_style.set_parent(parent_style)
 
 			# Process the <style:style>'s child elements.
 			for el in odt_style:
-				if self.debug:
+				if self.opts.debug:
 					print "    %s %s" % (el.tag, odt_style.attrib)
 				if not el.tag.endswith("-properties"):
-					if self.debug:
+					if self.opts.debug:
 						print "      unimplemented style child: %s" % el.tag
 					continue
 
@@ -1396,10 +1594,11 @@ class OdtStyle2Css(object):
 						"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
 						"border", "border-left", "border-right", "border-top", "border-bottom",
 					):
-					if prop in el.attrib:		# if this attribute is defined,
-						value = el.attrib[prop]
-						if value != "100%":		# don't know what 100% is supposed to mean, but it is poison...
-							css_style.properties[prop] = self.clean_dimensions(value)
+					if prop in el.attrib:						# If this attribute is defined,
+						if not prop in css_style.properties:	# If not yet converted,
+							value = el.attrib[prop]
+							if value != "100%":					# don't know what 100% is supposed to mean, but it is poison...
+								css_style.properties[prop] = self.clean_dimensions(value)
 
 				# Convert percentage line height to multiplication factor because percentage
 				# line height is inherited differently in ODF and in CSS.
@@ -1503,6 +1702,7 @@ class OdtStyle2Css(object):
 									css_style.properties[prop] = el2.attrib[prop]
 									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
 									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
+
 			# FIXME: read up on this. Does this attribute really indicate a new page?
 			# NOTE: this will override the break-before in <paragraph-properties>
 			if "master-page-name" in odt_style.attrib and odt_style.attrib["master-page-name"] != "":
@@ -1517,19 +1717,19 @@ class OdtStyle2Css(object):
 						if value != "none":
 							css_style.properties["border"] = value
 
-			if self.debug:
+			if self.opts.debug:
 				print "    -->%s" % unicode(css_style)
 
 			# Add to list of all styles.
 			self.styles_ordered.append(css_style)
-
+	
 			# For handling parent-style-name attribute
 			self.styles_byselector[(css_style.template, css_style.name)] = css_style
-
-			# If will appear in CSS,
+	
+			# If this style actually will appear in the CSS stylesheet,
 			if not css_style.simplified_td:
 				self.styles_byname[css_style.name] = css_style
-
+	
 			# If this style has the same right-hand-side as a style defined earlier,
 			# note that that that earlier style could be used as a substitute to save
 			# space in the HTML output file.
@@ -1548,8 +1748,42 @@ class OdtStyle2Css(object):
 			# </style:default-style>
 			pass
 
+		# Partial implementation of List Styles
+		# FIXME: one style is converted into a whole set
+		elif odt_style.tag == "list-style":
+			style_name = odt_style.attrib['name']
+			previous_margin_left = 0.0
+			css_style = CssListStyle(style_name)
+			for el in odt_style:
+				if el.tag == 'list-level-style-bullet':
+					css_style.tag = "UL"
+				elif el.tag == 'list-level-style-number':
+					css_style.tag = "OL"
+				else:
+					raise OdfNotImplementedYet("Unsupported list-style element: %s" % el.tag)
+				level = int(el.attrib['level'])
+				#print "list %s level %d" % (css_style.name, level)	
+				for el2 in el:
+					if el2.tag == 'list-level-properties':
+						for el3 in el2:
+							if el3.tag == 'list-level-label-alignment' and el3.attrib.get('label-followed-by') == 'listtab':
+								margin_left = self.dimension2points(el3.attrib['margin-left'])
+								#print " margin-left:", margin_left
+								css_style.add_level(level, "%.2fpt" % (margin_left - previous_margin_left))
+								previous_margin_left = margin_left
+								break
+						else:		# presumably "space"
+							css_style.add_level(level, "18pt")
+							previous_margin_left += 18
+						break
+				else:
+					OdfInvalid("list-style %s has not list-level-properties" % css_style.name)
+				
+			self.styles_ordered.append(css_style)
+			self.styles_byname[css_style.name] = css_style
+
 		else:
-			if self.debug:
+			if self.opts.debug:
 				print "      unimplemented style tag: %s" % odt_style.tag
 
 		return True
@@ -1581,6 +1815,15 @@ class OdtStyle2Css(object):
 		css_style.used = True
 		return css_style.className(), css_style.language
 
+	# For the wrapping tables hack
+	def _by_css_class(self, css_class):
+		if css_class is None:
+			return None
+		class_name = css_class.split(" ")[0].replace("_",".")
+		if class_name == "":
+			return None
+		return self.styles_byname[class_name]
+
 	def get_break_before(self, style_name):
 		if not style_name in self.styles_byname:	# because we do not yet convert all styles
 			return None
@@ -1589,20 +1832,9 @@ class OdtStyle2Css(object):
 	# Return the converted styles as an array of CSS lines.
 	def get_css(self, css_version):
 		css = []
-
 		for css_style in self.styles_ordered:
 			if css_style.used or (not self.opts.drop_unused_styles):
-				style_text = "%s{%s}" % (
-					css_style.template % css_style.className(),
-					";".join(["%s:%s" % (name, value) for name, value in css_style.properties.items()])
-					)
-				if css_style.media is not None and css_version >= 3.0:
-					style_text = "@media %s { %s }" % (
-						css_style.media,
-						style_text
-						)
-				css.append(style_text)
-
+				css.append(css_style.get_text(css_version))
 		return css
 
 	# Parse the right-hand side of a CSS style setting, find the numeric
@@ -1699,15 +1931,19 @@ class Odt2HtmlImage(object):
 		for key in element.attrib.keys():
 			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
 				del element.attrib[key]
+			elif key.startswith("{http://inkscape.sourceforge.net/DTD/sodipodi-0.dtd}"):
+				del el.attrib[key]
 			elif key.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
 				del element.attrib[key]
 		for child in list(element):
 			#print child.tag
 			if child.tag.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
 				element.remove(child)
+			if child.tag.startswith("{http://inkscape.sourceforge.net/DTD/sodipodi-0.dtd}"):
+				element.remove(child)
 			elif child.tag.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
 				element.remove(child)
-			elif child.tag.startswith("{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"):
+			elif child.tag == "{http://www.w3.org/2000/svg}metadata":
 				element.remove(child)
 			else:
 				self.prune_svg(child)
@@ -1724,11 +1960,13 @@ class LabelSoundFinder(object):
 		with codecs.open(os.path.join(self.output_dirname, "%s.txt" % soundfile_basename), "r", "utf-8") as f:
 			for line in f:
 				start, stop, text = line.rstrip().split("\t")
+				assert re.match(r'^\d+\.\d+$', start)
+				assert re.match(r'^\d+\.\d+$', stop)
 				self.labels.append([text, "t=%s,%s" % (start, stop)])
 	def find(self, text):
 		if len(self.labels) > 0 and self.labels[0][0] == text:
 			label = self.labels.pop(0)
-			return "%s#%s" % (self.base_url, label[1])
+			return "%s.ogg#%s" % (self.base_url, label[1])
 		else:
 			return None
 
@@ -1745,8 +1983,10 @@ class DirSoundFinder(object):
 				"%s/%s" % (self.td_sound_dir, text),
 				"%s/%s" % (self.td_sound_dir, text.replace("?",""))
 				):
-			if os.path.exists("%s/%s.mp3" % (self.output_dirname, filename)) and os.path.exists("%s/%s.ogg" % (self.output_dirname, filename)):
-				return urllib.quote(filename.encode("utf-8"))
+			if os.path.exists("%s/%s.ogg" % (self.output_dirname, filename)) and os.path.exists("%s/%s.mp3" % (self.output_dirname, filename)):
+				#url = "%s/%s.ogg" % (self.output_dirname, filename)
+				url = "%s.ogg" % filename
+				return urllib.quote(url.encode("utf-8"))
 		return None
 
 #============================================================================
@@ -1757,7 +1997,7 @@ class DirSoundFinder(object):
 class OdfNotImplementedYet(Exception):
 	pass
 
-# We know abou this case and do not play to support it
+# We do know about this case, but do not plan to support it.
 class OdfNotSupported(Exception):
 	pass
 
@@ -1769,6 +2009,10 @@ class OdfInvalid(Exception):
 class OdfBadPlayer(Exception):
 	pass
 
+# Formatting that will not translate well
+class OdtBadFormatting(Exception):
+	pass
+
 #============================================================================
 # Main
 #============================================================================
@@ -1776,18 +2020,26 @@ if __name__ == "__main__":
 	sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
 	sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
 
-	debug = 0
-	output_format = "html"
-	output_directory = None
+	verbose = False
 	force = False
+	output_directory = None
+	opts = Odt2HtmlOptions()
 	while len(sys.argv) >= 2 and sys.argv[1].startswith("-"):
 		if sys.argv[1] == "--debug":
-			debug = 1
+			opts.debug = 1
 			force = True
+		elif sys.argv[1] == "--verbose":
+			verbose = True
 		elif sys.argv[1] == "--force":
 			force = True
 		elif sys.argv[1] == "--epub":
-			output_format = "epub"
+			opts.output_format = "epub"
+		elif sys.argv[1] == "--snobject":
+			opts.snobject = True
+		elif sys.argv[1].startswith("--template="):
+			opts.template = sys.argv[1][11:]
+		elif sys.argv[1].startswith("--player-lib-dir="):
+			opts.player_lib_dir = sys.argv[1][17:]
 		elif sys.argv[1] == "-o":
 			if len(sys.argv) >= 3:
 				sys.argv.pop(1)	# -o
@@ -1800,23 +2052,38 @@ if __name__ == "__main__":
 			sys.exit(1)
 		sys.argv.pop(1)
 
+	count_total = 0
+	count_built = 0
+	count_rebuilt = 0
 	for filename in sys.argv[1:]:
 		filename = filename.decode("utf-8")		# FIXME: why do we have to do this?
-		print u"\"%s\"" % filename
+		if verbose:
+			print u"\"%s\"" % filename
+		filename_mtime = os.path.getmtime(filename)
 
 		basename, ext = os.path.splitext(filename)
 		if ext != ".odt":
-			sys.stderr.write("Not an ODT file.\n")
+			sys.stderr.write("Not an ODT file: %s\n" % filename)
 			sys.exit(1)
 		if output_directory is None:
-			output_filename = "%s.%s" % (basename, output_format)
+			output_filename = "%s.%s" % (basename, opts.output_format)
 		else:
-			output_filename = os.path.join(output_directory, "%s.%s" % (os.path.basename(basename), output_format))
+			output_filename = os.path.join(output_directory, "%s.%s" % (os.path.basename(basename), opts.output_format))
 
-		filename_mtime = os.path.getmtime(filename)
-		if force or not os.path.exists(output_filename) or os.path.getmtime(output_filename) < filename_mtime:
-			print "  rebuilding..."
-	
+		count_total += 1
+		build = False
+		if not os.path.exists(output_filename):
+			if verbose:
+				print "  building..."
+			count_built += 1 
+			build = True
+		elif force or os.path.getmtime(output_filename) < filename_mtime:
+			if verbose:
+				print "  rebuilding..."
+			count_rebuilt += 1
+			build = True
+
+		if build:
 			if os.path.exists(output_filename):
 				os.unlink(output_filename)
 
@@ -1826,7 +2093,7 @@ if __name__ == "__main__":
 
 			# Perform the conversion
 			try:
-				Odt2Html(filename, output_filename, output_format, debug)
+				Odt2Html(filename, output_filename, opts)
 			except OdfNotImplementedYet as e:
 				sys.stderr.write("ODF feature not implemented: %s\n" % unicode(e))
 				sys.exit(1)
@@ -1843,6 +2110,8 @@ if __name__ == "__main__":
 			# Make the creation time of the HTML file one millisecond after the
 			# creation time of the ODT file from which it was made.
 			os.utime(output_filename, (filename_mtime + 0.01, filename_mtime + 0.01))
-		else:
+		elif verbose:
 			print "    up-to-date"
+
+	print "Built %d and rebuilt %d of %d files." % (count_built, count_rebuilt, count_total)
 
