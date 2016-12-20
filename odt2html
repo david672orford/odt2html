@@ -3,7 +3,7 @@
 # odt2html
 # Copyright 2014--2016, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 19 December 2016
+# Last modified: 20 December 2016
 
 #=============================================================================
 # To the User
@@ -36,19 +36,19 @@
 # and CSS.
 #
 # When you format a document you are giving instructions to the word processor
-# which tell it how to lay the elements out on a page. A common poor practice
-# is to nudge the elements into their proper positions by adding and removing
-# spaces and carriage returns. Such formatting breaks if the page size is
-# changed or if material is added or removed. In contrast good formatting
-# expresses the writer's intent in terms the word processor can understand
-# such as "keep these paragraphs together if at all possible" or "do not
-# break the line at this space".
+# which tell it how to lay the elements out on a page. A common but poor
+# practice is to nudge the page elements into their proper positions by adding
+# and removing spaces and carriage returns. Such formatting breaks whenever the
+# page size is changed or if material is added or removed. In contrast good
+# formatting expresses the writer's intent in terms the word processor can
+# understand such as "keep these paragraphs together if at all possible" or "do
+# not break the line at this space".
 #
 # Since web pages can be resized almost without limit, it goes without saying
-# that you must use good formatting in your ODF files. What is not so obvious
-# is that you must add additional formatting for the document to remain
-# readable during extreme resizing such as when it is displayed on a mobile
-# telephone.
+# that you must use good formatting in ODF files which you intend to turn into
+# reflowable web pages. What is not so obvious is that you must add additional
+# formatting for the document to remain readable during extreme resizing such
+# as when it is displayed on a smartphone.
 #
 # Some examples of formatting problems which you should correct:
 #
@@ -83,6 +83,8 @@
 #   to represent a verse from a poem, you should reformat them to use a left
 #   margin. Otherwise when the lines are wrapped on a narrow display, they
 #   may become difficult to read. You may want to use a hanging indentation.
+#   Create a hanging indent by setting a left margin on the paragraph and a
+#	negative first-line margin.
 #
 # * Watch out for superscripts and subscripts. In Openoffice there are
 #   ways to put regular text inside a span of superscript or subscript
@@ -105,15 +107,16 @@
 # * Font changes including family, weight, slant, superscript, subscript
 # * Text color (forground and background)
 # * Tables with borders and padding
-# * Unordered Lists
+# * Frames
+# * Ordered and unordered Lists
 # * Hyperlinks
 # * Raster images in JPEG, GIF, and PNG formats
-# * SVG drawings
+# * Vector drawings in SVG format
 # * Multiple columns
 #
 # == No Plans to Support ==
 #
-# * Embedded openoffice drawings (use SVG instead)
+# * Embedded Openoffice drawings (use SVG instead)
 # * Tabs (not supported in HTML)
 # * Individual column widths in multi-column sections (not supported in HTML)
 #
@@ -174,16 +177,22 @@
 # a file in the directory specified or does not match the next message in the
 # Audacity labels file specified, it will be skipped and will not speak.
 #
+# == Reflowable Grid Layout ==
+#
+# Tables which contain the substring "Wrap" in their names will be turned into
+# reflowable grids. This means that the number of columns will be adjusted to
+# whatever fits in the available page (or screen) width.
+#
 
 #=============================================================================
 # Programmer's Notes
 #=============================================================================
 #
-# == Opendocument ==
+# == Opendocument Standard ==
 # * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
 # * http://docs.oasis-open.org/office/v1.2/OpenDocument-v1.2-part1.html
 #
-# == Python Elementtree ==
+# == Python Elementtree and LXML ==
 # * https://docs.python.org/2/library/xml.etree.elementtree.html
 # * http://eli.thegreenplace.net/2012/03/15/processing-xml-in-python-with-elementtree/
 # * http://lxml.de/
@@ -193,7 +202,7 @@
 # * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
 # * https://code.google.com/p/python-epub-builder/
 #
-# == Social Networking ==
+# == Social Networking Tags ==
 # * https://developers.google.com/+/web/snippet/
 # * https://developers.google.com/structured-data/testing-tool/
 #
@@ -201,8 +210,6 @@
 # * Mixed ordered/unordered lists are not implemented. Should they be?
 # * Implement document background color
 # * Convert default paragraph style
-# * Implement alignment of tables to right document margin
-# * Implement more image placement possibilities
 # * Reimplement style simplification:
 #   * Simplify more to make the CSS smaller
 #   * It would be nice if we no longer needed to provide options
@@ -943,12 +950,8 @@ class Odt2Html(object):
 			if attrib in odt_frame.attrib:
 				style.append("%s:%s" % (attrib, odt_frame.attrib[attrib]))
 
-		# FIXME: figure out how 'from-left' is really supposed to work. Disabled until we can fix this.
-		#if odt_frame.attrib['anchor-type'] == 'paragraph':
-		#	if 'x' in odt_frame.attrib:
-		#		style.append('margin-left:%s' % odt_frame.attrib['x'])
-		#	if 'y' in odt_frame.attrib:
-		#		style.append('margin-top:%s' % odt_frame.attrib['y'])
+		if 'x' in odt_frame.attrib:		# XXX
+			style.append('margin-left:%s' % odt_frame.attrib['x'])
 
 		html_el.attrib['style'] = ";".join(style)
 		return html_el
@@ -1533,35 +1536,9 @@ class OdtStyle2Css(object):
 			elif style_family == "table-row":
 				css_style.template = "TR.%s"
 			elif style_family == "table-cell":
-				simplifiable = True
-				for el in odt_style:
-					if el.tag == "table-cell-properties":
-						vertical_align = el.attrib.get('vertical-align','middle')
-						if vertical_align != 'middle':
-							css_style.properties['vertical-align'] = vertical_align
-							simplifiable = False
-				if self.opts.simplify_table_borders and simplifiable:
-					css_style.template = "TABLE.%s TD"
-					css_style.simplified_td = True
-					css_style.name = css_style.name.split(".")[0]	# drop the cell part of the name
-				else:
-					css_style.template = "TD.%s"
+				css_style.template = "TD.%s"
 			elif style_family == "graphic":
-				css_style.template = "IMG.%s"
-				for el in odt_style:
-					if el.tag == "graphic-properties":
-						if el.attrib.get('vertical-rel') == 'baseline':
-							pass
-						else:
-							horizontal_pos = el.attrib.get('horizontal-pos')
-							if horizontal_pos in ('left', 'right'):
-								css_style.properties['float'] = horizontal_pos
-							#elif horizontal_pos == 'from-left':							# FIXME: what is this really supposed to do?
-							#	css_style.properties['float'] = 'right'
-							elif horizontal_pos == 'center':
-								css_style.properties['display'] = 'block'
-								css_style.properties['margin-left'] = 'auto'
-								css_style.properties['margin-right'] = 'auto'
+				css_style.template = ".%s"		# <IMG> or <DIV>
 			elif style_family == "section":
 				css_style.template = "DIV.%s"
 			else:
@@ -1594,24 +1571,44 @@ class OdtStyle2Css(object):
 						"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
 						"border", "border-left", "border-right", "border-top", "border-bottom",
 					):
-					if prop in el.attrib:						# If this attribute is defined,
-						if not prop in css_style.properties:	# If not yet converted,
-							value = el.attrib[prop]
-							if value != "100%":					# don't know what 100% is supposed to mean, but it is poison...
-								css_style.properties[prop] = self.clean_dimensions(value)
+					if prop in el.attrib:					# If this attribute is defined,
+						value = el.attrib[prop]
+						if value != "100%":					# don't know what 100% is supposed to mean, but it is poison...
+							css_style.properties[prop] = self.clean_dimensions(value)
 
-				# Convert percentage line height to multiplication factor because percentage
-				# line height is inherited differently in ODF and in CSS.
-				if "line-height" in el.attrib:
-					value = el.attrib["line-height"]
-					m = re.match(r'^(\d+)%$', value)
-					if m:
-						value = "%.2f" % (int(m.group(1)) / 100.0)
-					css_style.properties["line-height"] = value
-					
+				if el.tag == "section-properties":
+					for el2 in el:
+						if el2.tag == "columns":
+							for prop in ("column-count", "column-gap"):
+								if prop in el2.attrib:
+									css_style.media = "(min-width:8in)"
+									css_style.properties[prop] = el2.attrib[prop]
+									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
+									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
+
+				# To text blocks
+				elif el.tag == "paragraph-properties":
+					for prop in ("text-align", "text-indent", "background-color"):
+						if prop in el.attrib:
+							css_style.properties[prop] = el.attrib[prop]
+					if "line-height" in el.attrib:
+						value = el.attrib["line-height"]
+						# Convert percentage line height to multiplication factor because percentage
+						# line height is inherited differently in ODF and in CSS.
+						m = re.match(r'^(\d+)%$', value)
+						if m:
+							value = "%.2f" % (int(m.group(1)) / 100.0)
+						css_style.properties["line-height"] = value
+					if "break-before" in el.attrib:
+						css_style.break_before = el.attrib["break-before"]
+						# Webkit uses non-standard attribute
+						if el.attrib["break-before"] == "column":
+							css_style.properties["-webkit-column-break-before"] = "always"
+					if "border" in el.attrib:
+						css_style.properties["border"] = el.attrib['border']
 
 				# Text in blocks or inline
-				if el.tag == "text-properties":
+				elif el.tag == "text-properties":
 					if self.opts.font_support_level >= 1:
 						font_name = el.attrib.get("font-name")
 						if font_name is not None:
@@ -1657,19 +1654,6 @@ class OdtStyle2Css(object):
 					if el.attrib.get("text-line-through-style","none") != "none":
 						css_style.properties["text-decoration"] = "line-through"
 
-				# To text blocks
-				elif el.tag == "paragraph-properties":
-					for prop in ("text-align", "text-indent", "background-color"):
-						if prop in el.attrib:
-							css_style.properties[prop] = el.attrib[prop]
-					if "break-before" in el.attrib:
-						css_style.break_before = el.attrib["break-before"]
-						# Webkit uses non-standard attribute
-						if el.attrib["break-before"] == "column":
-							css_style.properties["-webkit-column-break-before"] = "always"
-					if "border" in el.attrib:
-						css_style.properties["border"] = el.attrib['border']
-
 				elif el.tag == "table-properties":
 					if "width" in el.attrib:
 						width = el.attrib["width"]
@@ -1680,10 +1664,16 @@ class OdtStyle2Css(object):
 						# Otherwise, use the stated width, but limit it to 100%.
 						else:
 							css_style.properties["max-width"] = width
-							#css_style.properties["max-width"] = "calc(94%% - %s)" % css_style.properties.get("margin-left","0pt")
-					# If no width was specified, it is explicitly a 100% wide table.
-					else:
+					else:	# If no width was specified, it is explicitly a 100% wide table.
 						css_style.properties["width"] = "100%"
+
+					if "align" in el.attrib:
+						align = el.attrib["align"]
+						if align == "right":
+							css_style.properties['margin-left'] = 'auto'
+						elif align == "center":
+							css_style.properties['margin-left'] = 'auto'
+							css_style.properties['margin-right'] = 'auto'
 
 				elif el.tag == "table-column-properties":
 					if "column-width" in el.attrib:
@@ -1693,15 +1683,24 @@ class OdtStyle2Css(object):
 					if "min-row-height" in el.attrib:
 						css_style.properties["height"] = el.attrib['min-row-height']
 
-				elif el.tag == "section-properties":
-					for el2 in el:
-						if el2.tag == "columns":
-							for prop in ("column-count", "column-gap"):
-								if prop in el2.attrib:
-									css_style.media = "(min-width:8in)"
-									css_style.properties[prop] = el2.attrib[prop]
-									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
-									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
+				if el.tag == "table-cell-properties":
+					vertical_align = el.attrib.get('vertical-align','middle')
+					if vertical_align != 'middle':
+						css_style.properties['vertical-align'] = vertical_align
+
+				if el.tag == "graphic-properties":
+					if el.attrib.get('vertical-rel') == 'baseline':
+						pass
+					else:
+						horizontal_pos = el.attrib.get('horizontal-pos')
+						if horizontal_pos in ('left', 'right'):
+							css_style.properties['float'] = horizontal_pos
+						elif horizontal_pos == 'from-left':
+							css_style.properties['float'] = 'left'
+						elif horizontal_pos == 'center':
+							css_style.properties['display'] = 'block'
+							css_style.properties['margin-left'] = 'auto'
+							css_style.properties['margin-right'] = 'auto'
 
 			# FIXME: read up on this. Does this attribute really indicate a new page?
 			# NOTE: this will override the break-before in <paragraph-properties>
@@ -1716,6 +1715,10 @@ class OdtStyle2Css(object):
 						del css_style.properties[name]
 						if value != "none":
 							css_style.properties["border"] = value
+				if not 'vertical-align' in css_style.properties:
+					css_style.template = "TABLE.%s TD"
+					css_style.simplified_td = True
+					css_style.name = css_style.name.split(".")[0]	# drop the cell part of the name
 
 			if self.opts.debug:
 				print "    -->%s" % unicode(css_style)
@@ -1749,7 +1752,7 @@ class OdtStyle2Css(object):
 			pass
 
 		# Partial implementation of List Styles
-		# FIXME: one style is converted into a whole set
+		# FIXME: converting ODT style to a whole set of CSS styles is messy
 		elif odt_style.tag == "list-style":
 			style_name = odt_style.attrib['name']
 			previous_margin_left = 0.0
@@ -1782,9 +1785,8 @@ class OdtStyle2Css(object):
 			self.styles_ordered.append(css_style)
 			self.styles_byname[css_style.name] = css_style
 
-		else:
-			if self.opts.debug:
-				print "      unimplemented style tag: %s" % odt_style.tag
+		elif self.opts.debug:
+			print "      unimplemented style tag: %s" % odt_style.tag
 
 		return True
 
