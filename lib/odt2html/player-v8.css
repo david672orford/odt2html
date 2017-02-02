@@ -13,11 +13,11 @@ IMG.play_button {
 	}
 
 /* <TD> in the text which the user can touch to hear a sound */
-TD.play {
+TD.play, DIV.wrap > DIV.play {
 	border: 1px solid blue !important;
 	cursor: pointer;
 	}
-TD.play:hover {
+TD.play:hover, DIV.wrap > DIV.play:hover {
 	background-color: #f0f0f0;
 	}
 
@@ -34,15 +34,13 @@ DIV.audio_player {
 	/* So non-existent text does not push out bottom of box: */
 	font-size: 1px;
 	}
+DIV.audio_player * {
+	vertical-align: middle;
+	margin: 3px 15px 3px 0;
+	}
 DIV.audio_player AUDIO {
-	margin: 3px;
-	width: calc(100% - 110px);
-	}
-DIV.audio_player IMG.menu_btn {
-	margin: 3px 10px;
-	}
-DIV.audio_player IMG.close_btn {
-	margin: 3px 10px;
+	margin-left: 3px;
+	width: calc(100% - 112px);
 	}
 DIV.audio_player DIV.player_menu {
 	position: absolute;
@@ -65,9 +63,12 @@ DIV.video_player DIV.titlebar {
 DIV.video_player DIV.titlebar DIV.titlebar_text {
 	font-family: sans-serif;
 	font-weight: bold;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	color: white;
 	font-size: 16px;
-	padding: 8px 0px 0px 40px;
+	padding: 8px 2px 0px 2px;
 	}
 DIV.video_player IMG.menu_btn {
 	float: left;
@@ -107,6 +108,9 @@ DIV.video_player VIDEO {
 BODY.with_video {
 	padding-bottom: 500px;
 	}
+BODY.with_audio {
+	padding-bottom: 70px;
+	}
 
 /* Popup menu of download links */
 DIV.player_menu {
@@ -124,5 +128,13 @@ DIV.player_menu A {
 	}
 DIV.player_menu A:not([href]) {
 	color: #808080;
+	}
+
+/* Text being read */
+DIV.player_text SPAN.w:hover {
+	outline: 1px black dotted;
+	}
+DIV.player_text SPAN.highlighted {
+	background-color: yellow;
 	}
 
