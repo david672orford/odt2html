@@ -1,9 +1,9 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Copyright 2014--2016, Trinity College Computing Center
+# Copyright 2014--2017, Trinity College Computing Center
 # Written by David Chappell
-# Last modified: 20 December 2016
+# Last modified: 5 February 2017
 
 #=============================================================================
 # To the User
@@ -30,10 +30,11 @@
 # == Preparing Documents for Conversion ==
 #
 # This program is intended to be part of a 'document preparation workflow'.
-# It can produce the web version of an ODF of document which you have
-# carefully prepared so that it will reflow properly and does not contain
-# any formatting which cannot be represented using straigh-forward HTML
-# and CSS.
+# Documents should be propared with conversion to HTML in mind. Then
+# Openoffice can be used to produce PDF versions and Odt2html can produce
+# the HTML version. For this to work well, one must avoid using formatting
+# which is difficult to represent in HTML or which will break when the 
+# page is radically resized.
 #
 # When you format a document you are giving instructions to the word processor
 # which tell it how to lay the elements out on a page. A common but poor
@@ -47,8 +48,8 @@
 # Since web pages can be resized almost without limit, it goes without saying
 # that you must use good formatting in ODF files which you intend to turn into
 # reflowable web pages. What is not so obvious is that you must add additional
-# formatting for the document to remain readable during extreme resizing such
-# as when it is displayed on a smartphone.
+# formatting to define what should happen when the document is made much
+# smaller such as when it is displayed on a smartphone.
 #
 # Some examples of formatting problems which you should correct:
 #
@@ -64,20 +65,21 @@
 #   as you wished. Replace tabbed tables with actual tables. You can turn
 #   the borders off if you wish.
 #
-# * Extra spaces which may have been inserted to adjust line breaking will
+# * Extra spaces which may have been inserted to shift line breaks will
 #   probably not produce the result you intended when the ODF file is
 #   converted to HTML. Even if it does, it will break when the window size is
 #   adjusted. Instead insert an explicit line break (shift-enter in
 #   Openoffice) or use non-breaking spaces to prevent a line break at an
 #   undesireable place.
 #
-# * Likewise, extra carriage returns (empty paragraphs) inserted to move a
+# * Likewise, extra carriage returns (empty paragraphs) inserted to shift a
 #   page break will cause problems. There are no pages in a web browser
-#   window and so the the extra space will only make a mess. Instead in
-#   Openoffice go into paragraph formatting and in the Text Flow tab put a
-#   checkmark next to "Keep with next paragraph". This not only get rid of
-#   the spurious vertical space, but it will fix the bad break permanently in
-#   the print and PDF versions.
+#   window and so the the extra space will simply look bad in the HTML
+#	version. Instead open the document in Openoffice Writer, place the cursor
+#	in the paragraph before the undesired break, go to Format->Paragraph and
+#	in the Text Flow tab put a checkmark next to "Keep with next paragraph".
+#	This will not only preserve the appearance of the HTML version, but it
+#	will fix the bad break permanently in the print and PDF versions.
 #
 # * If you have indented single-line paragraphs using spaces or tabs, perhaps
 #   to represent a verse from a poem, you should reformat them to use a left
@@ -87,9 +89,9 @@
 #	negative first-line margin.
 #
 # * Watch out for superscripts and subscripts. In Openoffice there are
-#   ways to put regular text inside a span of superscript or subscript
-#   text. HTML has no provision for this. Writing code to unnest the spans
-#   would be tricky, so we just warn you about it and expect you to fix
+#   ways to put a run of normal text inside a run of superscript or subscript
+#   text. HTML has no provision for this. It would be very tricky to unnest
+#	the spans in Odt2html, so we just warn you about it and expect you to fix
 #   it in the source document. Select the text in question, chose 
 #   Format->Clear Direct Formatting, and then select the parts which should
 #   be superscripts or subscripts and again format them as such.
@@ -138,22 +140,28 @@
 # are cut from 1/2" to 1/8" for narrow screens. Second, multi-column layout
 # is disabled for narrow screens.
 #
-# == Hyperlinks to Audio and Video Player Files ==
+# == Hyperlinks to Audio and Video Files ==
 #
-# If the target attribute of a hyperlink is "player", then it will be played in
-# a popup player.
+# If you put an hyperlink to an audio or video file in the ODT document and
+# set the "Target" to "player", create a popup player for it. (If you  do not
+# set the target attribute, the browser will handle it however it thinks best.)
 #
 # The audio player takes the form of a horizontal bar at the bottom of the
-# screen which contains an HTML 5 <audio> element, a menu of download links,
-# and a close button. If the URL of the audio file is specified without an
-# extension, then Odt2html will check to be sure you have both .mp3 and .ogg
-# versions of the file and will produce a <source> element for each.
+# screen which contains a play/pause button, a progress bar, a menu of
+# download links, and a close button.
 #
-# The video player also pops up at the bottom of the screen. The size of the
-# video player is 640x480 unless the window is narrower in which case it will
-# be 480x360 or 320x240. If the URL is specified without an extension, then
-# Odt2html will check to be sure you have both .mp4 and .webm versions and
-# will produce a <source> element for each.
+# If the hyperlink type is "Document" (a relative link), then it should point
+# to either an .mp3 or an .ogg file. Odt2html will verify that the file exists
+# in both formats and let the browser pick when the file is played. If the
+# link type is "Internet", then it should point to an .mp3 file.
+#
+# The video player pops up in the middle of the window. It has a title bar
+# with download links and a close button. It can be dragged around the screen.
+#
+# If the hyperlink type is "Document" (a relative link), then it should point
+# to either an .mp4 or an .webm file. Odt2html will verify that the file exists
+# in both formats and let the browser pick when the file is played. If the
+# link type is "Internet", then it should point to an .mp4 file.
 #
 # == Speaking Table Cells ==
 #
@@ -250,6 +258,8 @@ class Odt2HtmlOptions(object):
 	template = None						# --template=
 	snobject = False					# --snobject
 	player_lib_dir = '../lib/odt2html'	# --player-lib-dir=
+	#player_version = "-v8.min"
+	player_version = "-v9"
 
 	# If False, then only one HTML file will be generated.
 	# If True, then one HTML file will be generated for
@@ -316,12 +326,12 @@ class Odt2Html(object):
 				self.enable_td_sound()
 			if self.opts.wrap_tables:
 				self.wrap_tables()
-			if self.opts.template:
-				self.add_template()
 			if self.opts.snobject:
 				self.add_schema_article()
 				self.add_opengraph()
 			self.embed_stylesheet()
+			if self.opts.template:
+				self.add_template()
 			self.save_html(output_filename)
 		elif self.opts.output_format == "epub":
 			self.opts.use_data_urls = False
@@ -748,7 +758,7 @@ class Odt2Html(object):
 				# sense. It also will not be rendered correctly on iPad browsers.
 				for child in html_el:
 					if child.tag == "span" and child.text == u"\u0301":
-						#raise OdtBadFormatting("Spurious stress mark span")
+						raise OdtBadFormatting("Spurious stress mark span")
 						print "  Warning: spurious stress mark span"
 
 			# If a <P> tag is completely empty, put a <BR> tag into it because
@@ -950,7 +960,7 @@ class Odt2Html(object):
 			if attrib in odt_frame.attrib:
 				style.append("%s:%s" % (attrib, odt_frame.attrib[attrib]))
 
-		if 'x' in odt_frame.attrib:		# XXX
+		if 'x' in odt_frame.attrib:
 			style.append('margin-left:%s' % odt_frame.attrib['x'])
 
 		html_el.attrib['style'] = ";".join(style)
@@ -978,11 +988,11 @@ class Odt2Html(object):
 			self.html_head.append(E.link({
 				'rel':'stylesheet',
 				'type':'text/css',
-				'href':'%s/player-v8.css' % self.opts.player_lib_dir,
+				'href':'%s/player%s.css' % (self.opts.player_lib_dir, self.opts.player_version)
 				}))
 			self.html_head.append(E.script({
 				'type':'text/javascript',
-				'src':'%s/player-v7.js' % self.opts.player_lib_dir,
+				'src':'%s/player%s.js' % (self.opts.player_lib_dir, self.opts.player_version)
 				}))
 			self.player_loaded = True
 
@@ -1005,7 +1015,7 @@ class Odt2Html(object):
 			LI,P { position:relative }
 			DIV.restrain { max-width:100% }
 			TABLE { border-collapse:collapse }
-			TH,TD { }
+			TH,TD { vertical-align: top }
 			DIV.wrap { display:flex; flex-flow:row wrap }
 			DIV.wrap DIV { display: inline-block; margin: 1px; display: flex; flex-direction: column }
 			HR.pagebreak { margin:0.5in }
@@ -1309,7 +1319,7 @@ class Odt2Html(object):
 			UL, OL { list-style-position: outside }
 			LI, P { position: relative }
 			TABLE { border-collapse: collapse }
-			TH, TD { }
+			TH, TD { vertical-align: top }
 			HR.pagebreak { margin: 0.5in -0.5in 0.5in -0.5in }
 			SPAN.space { white-space: pre-wrap }
 			""")
@@ -1684,8 +1694,8 @@ class OdtStyle2Css(object):
 						css_style.properties["height"] = el.attrib['min-row-height']
 
 				if el.tag == "table-cell-properties":
-					vertical_align = el.attrib.get('vertical-align','middle')
-					if vertical_align != 'middle':
+					vertical_align = el.attrib.get('vertical-align','top')
+					if vertical_align == "middle" or vertical_align == "bottom":
 						css_style.properties['vertical-align'] = vertical_align
 
 				if el.tag == "graphic-properties":
@@ -1934,7 +1944,7 @@ class Odt2HtmlImage(object):
 			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
 				del element.attrib[key]
 			elif key.startswith("{http://inkscape.sourceforge.net/DTD/sodipodi-0.dtd}"):
-				del el.attrib[key]
+				del element.attrib[key]
 			elif key.startswith("{http://www.inkscape.org/namespaces/inkscape}"):
 				del element.attrib[key]
 		for child in list(element):
