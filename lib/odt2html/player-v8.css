@@ -12,7 +12,7 @@ IMG.play_button {
 	top: .05em;
 	}
 
-/* A <TD> in the text which the user can click to hear a sound */
+/* <TD> in the text which the user can touch to hear a sound */
 TD.play, DIV.wrap > DIV.play {
 	border: 1px solid blue !important;
 	cursor: pointer;
@@ -70,7 +70,7 @@ DIV.video_player DIV.titlebar DIV.titlebar_text {
 	font-size: 16px;
 	padding: 8px 2px 0px 2px;
 	}
-DIV.video_player DIV.titlebar IMG.menu_btn {
+DIV.video_player IMG.menu_btn {
 	float: left;
 	padding: 2px;
 	}
