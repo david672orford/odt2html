@@ -1,7 +1,7 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Last modified: 2 October 2018
+# Last modified: 15 November 2018
 #
 # Copyright 2014--2018, Trinity College Computing Center
 # This file is part of Odt2html.
@@ -215,6 +215,7 @@
 # * http://lxml.de/lxmlhtml.html
 #
 # == Epub ==
+# * http://idpf.org/epub/201
 # * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
 # * https://code.google.com/p/python-epub-builder/
 #
@@ -1505,6 +1506,7 @@ class Odt2Html(object):
 
 		#---------------------------------------------
 		# Start building Content Index
+		# content.opf
 		#---------------------------------------------
 		index_tpl = ET.Element(
 			"{http://www.idpf.org/2007/opf}package",
@@ -1524,14 +1526,18 @@ class Odt2Html(object):
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}identifier",epub_uuid,{"id":"bookid"}))
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}language","en-US"))
 
-		# File which gives the book structure
+		# List of files in the book
 		manifest = E.manifest()
 		index_tpl.append(manifest)
+
+		# Style for rendering pages in the book
 		manifest.append(E.item({
 			"id":"css",
 			"href":"stylesheet.css",
 			"media-type":"text/css",
 			}))
+
+		# File which gives the book structure
 		manifest.append(E.item({
 			"id":"ncx",
 			"href":"toc.ncx",
@@ -1541,11 +1547,12 @@ class Odt2Html(object):
 		spine = E.spine({"toc":"ncx"})
 		index_tpl.append(spine)
 
-		#---------------------------------------------
-		# Split previously generated HTML and save
-		# in multiple files. Add them to the manifest
-		# and spine.
-		#---------------------------------------------
+		# FIXME: No <guide> section. Do we need one?
+
+		#-------------------------------------------------------------
+		# Add the HTML, possibly split into a separate file for
+		# each <section> in the ODT file.
+		#-------------------------------------------------------------
 
 		self.html_head.append(E.link({"type":"text/css","rel":"stylesheet","href":"stylesheet.css"}))
 
@@ -1563,28 +1570,36 @@ class Odt2Html(object):
 		
 			content_id = "content%d" % i
 			content_filename = "content%d.html" % i	
+
+			# Add this part to <manifest> element of content.opf so
+			# that the ereader will know it is part of the ebook.
 			manifest.append(E.item({
 				"id":content_id,
 				"href":content_filename,
 				"media-type":"application/xhtml+xml",
 				}))
+
+			# Add this part to <spine> element of content.opf so the
+			# ereader will know where it comes in the reading order.
 			spine.append(E.itemref({
 				"idref":content_id
 				}))
 
+			# Generate the HTML
 			html = E.html(self.html_head, chunk)
 			html.attrib['xmlns'] = 'http://www.w3.org/1999/xhtml'
 			html_elementtree = ET.ElementTree(element=html)
-
 			text = '<?xml version="1.0" encoding="UTF-8"?>\n' \
 				+ '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n' \
 				+ ET.tostring(html_elementtree, encoding="utf-8", pretty_print=True)
+
+			# Add the HTML to the EPUB file
 			epub.writestr(content_filename, text, zipfile.ZIP_DEFLATED)
 
 			i += 1
 
 		#---------------------------------------------
-		# Zip each embedded images and add it to
+		# Zip each embedded image and add it to
 		# the manifest
 		#---------------------------------------------
 		i = 1
@@ -1607,6 +1622,7 @@ class Odt2Html(object):
 			)
 		epub.writestr("toc.ncx", self.epub_toc(epub_uuid), zipfile.ZIP_DEFLATED)
 
+	# Generate style for an EPUB file
 	def epub_css(self):
 		# The base CSS stylesheet for ebook readers. Remember that
 		# this is CSS 2.1, so no @media queries.
@@ -1627,6 +1643,9 @@ class Odt2Html(object):
 
 		return css
 
+	# Generate the Navigation Control file for XML (NCX) for an EPUB file.
+	# This is the machine-readable table of contents which the ereader
+	# may incorporate into its navigation controls.
 	def epub_toc(self, epub_uuid):
 		ncx = ET.Element(
 			"{http://www.daisy.org/z3986/2005/ncx/}ncx",
