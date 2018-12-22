@@ -1,7 +1,7 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Last modified: 15 November 2018
+# Last modified: 21 December 2018
 #
 # Copyright 2014--2018, Trinity College Computing Center
 # This file is part of Odt2html.
@@ -31,15 +31,18 @@
 # 
 # odt2html [--debug] [--force] [--epub] <filename.odt>...
 #
-#  --verbose             show what files are being processed
-#  --debug               print debug messages
-#  --force               regenerate the output file even if the input file is
-#                        not newer
-#  --epub                break the output into one HTML file per section and
-#                        wrap them in an EPUB file
-#  --template=<filename>
-#  --site-name=<text>    name of website for Opengraph metadata
-#  --site-url=<url>      base URL of site for constructing page URLs
+#  --verbose                     show what files are being processed
+#  --debug                       print debug messages
+#  --force                       regenerate the output file even if the input file is
+#                                not newer
+#  --epub                        break the output into one HTML file per section and
+#                                wrap them in an EPUB file
+#  --template=<filename>         skeletal HTML file into which to insert converted document
+#  --site-name=<text>            name of website for Opengraph metadata
+#  --site-url=<url>              base URL of site for constructing page URLs
+#  --index=<filename>            get site metadata and first breadcrumb from this file
+#  --nav-names=<list>            names of ODF frames which should be <nav> rather than <div>
+#  --player-lib-dir=<directory>  where are the media player files?
 #
 # Each input ODT file is converted to a single HTML or EPUB file. The output
 # file will have the same base name and will be placed in the same directory.
@@ -239,7 +242,7 @@
 # * Table styles collide with paragraph styles. To demonstrate, try naming a
 #   table "Heading".
 # * Playing of audio fragments may not work on some browsers if the file is
-#   not encoded with a constant bitrate. Detect this automatically.
+#   not encoded with a constant bitrate. Add automatic conformance testing.
 #
 
 from __future__ import print_function
@@ -263,8 +266,9 @@ from PIL import Image
 from urllib import quote, unquote
 
 #============================================================================
-# ODT to HTML Converter
+# Container for configuration (mainly from the command line)
 #============================================================================
+
 class Odt2HtmlOptions(object):
 	debug = False						# --debug
 	output_format = "html"
@@ -273,7 +277,7 @@ class Odt2HtmlOptions(object):
 	site_name = None					# --site-name=
 	site_url = None						# --site-url=
 	nav_names = []						# --nav-names=
-	index = None						# --index=
+	indexes = []						# --index=
 	player_lib_dir = '../lib/odt2html'	# --player-lib-dir=
 	player_version = "-v14.min"
 	zoom_image_version = "-v1"
@@ -317,40 +321,63 @@ class Odt2HtmlOptions(object):
 	# wrappable containers of boxes.
 	wrap_tables = True
 
+#============================================================================
+# These two classes represent an HTML index page listing the converted
+# documents. It is used to create backlinks in the converted documents.
+#============================================================================
+
 class Odt2HtmlIndexedArticle(object):
-	def __init__(self, section_name, section_hash, linked_text):
-		self.section_name = section_name
-		self.section_hash = section_hash
-		if u"—" in linked_text:
+	def __init__(self, index, section_id, section_heading, linked_text):
+		self.index = index						# Odt2HtmlIndex object
+		self.section_id = section_id			# <section id="X">
+		self.section_heading = section_heading	# <section><h2> text
+		if u"—" in linked_text and section_id is not None:
 			self.title = linked_text.split(u"—",1)[1]
 		else:
 			self.title = linked_text
+	def __str__(self):
+		return "<Odt2HtmlIndexArticle title=\"%s\">" % self.title
 
 class Odt2HtmlIndex(dict):
 	def __init__(self, filename):
+		self.filename = filename
 		self.site_name = None			# unused
 		self.site_url = None			# unused
 		self.publisher = None
 		self.author = None
+		self.breadcrumblist = []
+
+		# Listed files will be relative to this.
+		if "/" in filename:
+			self.dirname = os.path.dirname(filename) + "/"
+		else:
+			self.dirname = ""
 
 		with open(filename) as fh:
 			index = lxml.html.parse(fh)
 
+		# Collect information about the index entry for each listed document.
 		for section in index.xpath("//section"):
-			section_id = section.attrib['id']
+			section_id = section.attrib.get('id')
 			h2s = section.xpath("./h2")
-			if len(h2s) > 0:
-				section_heading = h2s[0].text
-				section_heading = re.sub(r"\s+\(.+\)\s*$", "", section_heading)
-				for anchor in section.xpath(".//a"):
-					href = anchor.attrib.get('href')
-					if href:
-						filename = unquote(href).decode("utf-8")
-						self[filename] = Odt2HtmlIndexedArticle(section_heading, section_id, anchor.text_content())
 
+			if len(h2s) == 1:
+				section_heading = re.sub(r"\s+\(.+\)\s*$", "", h2s[0].text)		# parenthetical removed
+			else:
+				section_heading = None
+
+			for anchor in section.xpath(".//a"):
+				href = anchor.attrib.get('href')
+				if href:
+					filename = unquote(href).decode("utf-8")
+					self[filename] = Odt2HtmlIndexedArticle(self, section_id, section_heading, anchor.text_content().strip())
+
+		# Collect site metadata from the index itself.
 		for script in index.xpath("//script[@type='application/ld+json']"):
 			data = json.loads(script.text)
 			for item in data if type(data) is list else (data,):
+
+				# Save author and publisher so that we can copy it into the Article metadata.
 				if item['@type'] == "Organization":
 					self.publisher = {
 						'@type':item['@type'],
@@ -362,12 +389,27 @@ class Odt2HtmlIndex(dict):
 						'name':item['name'],
 						}
 					continue
-				if item['@type'] == "WebSite":			# unused
+
+				# FIXME: This is currently unused. Can it replace --site-url= and --site-name=?
+				if item['@type'] == "WebSite":
 					self.site_name = item['name']
 					self.site_url = item['url']
 					if not self.site_url.endswith("/"):
 						self.site_url += "/"
 					continue
+
+				# Unless an index page is the top page of the site it should have breadcrumbs
+				# to show where it is in the site. Save them so that we can propagate them
+				# to the indexed document.
+				if item['@type'] == "BreadcrumbList":
+					self.breadcrumblist = item['itemListElement']
+
+	def __str__(self):
+		return "<Odt2HtmlIndex filename=\"%s\">" % self.filename
+
+#============================================================================
+# This does the actual conversion from ODT to HTML
+#============================================================================
 
 class Odt2Html(object):
 	def __init__(self, odt_filename, output_filename, opts=None):
@@ -393,8 +435,16 @@ class Odt2Html(object):
 		self.index_entry = None
 		self.default_language = "XX"
 
-		if self.opts.index is not None:
-			self.index_entry = self.opts.index.get(output_filename)
+		# Try to find an entry for the converted document in one of the HTML
+		# indexes specified with --index= options.
+		for index in self.opts.indexes:
+			search_filename = output_filename
+			if index.dirname != "" and search_filename.startswith(index.dirname):
+				search_filename = search_filename[len(index.dirname):]
+			#print(" search_filename:", search_filename)
+			self.index_entry = index.get(search_filename)
+			if self.index_entry is not None:
+				break
 
 		if self.opts.output_format == "html":
 			self.load_and_convert()
@@ -424,10 +474,10 @@ class Odt2Html(object):
 		else:
 			raise Exception
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Load the style and content XML files into memory and create most of the
 	# output HTML document in memory.
-	#============================================================================
+	#------------------------------------------------------------------
 	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
 		self.odt = zipfile.ZipFile(self.odt_filename)
@@ -558,9 +608,9 @@ class Odt2Html(object):
 				el.tail = None
 			del el.attrib['hoist']
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Load one of the XML files embedded in the ODT file
-	#============================================================================
+	#------------------------------------------------------------------
 	def load_xml(self, filename):
 		if self.opts.debug:	
 			print("===== %s =====" % filename)
@@ -584,9 +634,9 @@ class Odt2Html(object):
 
 		return tree
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Pass 1
-	#============================================================================
+	#------------------------------------------------------------------
 
 	def scan_element(self, odt_el):
 		# Collect the source file names of the subdocuments of a master document.
@@ -617,9 +667,9 @@ class Odt2Html(object):
 		href = section_sources[0].attrib['href']
 		return self.href_to_html(href)
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Pass 2
-	#============================================================================
+	#------------------------------------------------------------------
 
 	# This function converts an ODT element to HTML and adds it to the
 	# parent HTML element specified. It then calls itself on each child
@@ -1149,9 +1199,9 @@ class Odt2Html(object):
 			self.images.append(image)
 			return image.filename
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Post processing of generated HTML
-	#============================================================================
+	#------------------------------------------------------------------
 
 	# Embed required Javascript resources
 	def embed_javascript(self):
@@ -1274,10 +1324,24 @@ class Odt2Html(object):
 			if template_title:
 				self.title_el.text = "%s: %s" % (template_title, self.metadata['title'])
 
-		section_hash = ("#" + self.index_entry.section_hash) if self.index_entry is not None else ""
+		# FIXME: this probably contains lots of assumptions about the directory
+		# from which odt2html was invoked. This probably also does not work
+		# with more than one level of index since we do not walk to the root of
+		# the index tree.
+		if self.output_dirname == ".":
+			levels = 0
+		else:
+			levels = (self.output_dirname.count("/") + 1)
+			if self.index_entry is not None and self.index_entry.index.dirname != "":
+				levels -= self.index_entry.index.dirname.count("/")
+		back_to_index = ("../" * levels) if levels > 0 else "./"
 
-		# Copy <header> elements from the template's body while replacing
-		# the string "TITLE" with the document's title.
+		# If available, add fragment identifier of the index section which lists this document
+		if self.index_entry is not None and self.index_entry.section_id is not None:
+			back_to_index = "%s#%s" % (back_to_index, self.index_entry.section_id)
+
+		# Copy <header> elements from the template's body while interpolating
+		# various values indicated in {{varname}} notation.
 		basename = os.path.splitext(os.path.basename(self.odt_filename))[0]
 		i = 0
 		for template_header in template.xpath("//body/header"):
@@ -1291,8 +1355,9 @@ class Odt2Html(object):
 						el.attrib['href'] = "%s.odt" % basename
 					elif el.attrib['href'] == "{{PDF}}":
 						el.attrib['href'] = "%s.pdf" % basename
-					if "{{SECTION_HASH}}" in el.attrib['href']:
-						el.attrib['href'] = el.attrib['href'].replace("{{SECTION_HASH}}", section_hash)
+					elif "{{BACK_TO_INDEX}}" in el.attrib['href']:
+						el.attrib['href'] = el.attrib['href'].replace("{{BACK_TO_INDEX}}", back_to_index)
+
 			self.html_body.insert(i, template_header)
 			i += 1
 
@@ -1328,23 +1393,24 @@ class Odt2Html(object):
 		linked_data = []
 
 		if 'og:image' in self.metadata:
+			assert len(self.opts.indexes) > 0
+			index = self.opts.indexes[0]
 			assert self.metadata['og:image'].endswith(".png")
 			assert os.path.isfile(self.metadata['og:image'])
 			assert 'title' in self.metadata
 			assert 'Publication date' in self.metadata
-			assert self.opts.index
-			assert self.opts.index.publisher
-			assert self.opts.index.author
+			assert index.publisher
+			assert index.author
 			article = {
 				"@context": "http://schema.org",
 				"@type": "Article",
-				"headline":self.metadata['title'],
-				"mainEntityOfPage":page_url,
+				"headline": self.metadata['title'],
+				"mainEntityOfPage": page_url,
 				"image": [
 					site_url + urllib.quote(self.metadata['og:image'].encode("utf-8"))
 					],
-				"publisher": self.opts.index.publisher,
-				"author": self.opts.index.author,
+				"publisher": index.publisher,
+				"author": index.author,
 				"datePublished": self.metadata['Publication date'],
 				"dateModified": self.metadata['Revision date']
 				}	
@@ -1353,35 +1419,43 @@ class Odt2Html(object):
 			linked_data.append(article)
 
 		if self.index_entry is None:
-			print("  Warning: not listed in index, no breadcrumbs")
+			print("  Warning: document not listed in index, no BreadcrumbList created")
 		else:
-			assert 'title' in self.metadata
-			breadcrumbs = {
+			breadcrumblist = self.index_entry.index.breadcrumblist[:]
+
+			# the index section which lists this document (if there is one)
+			if self.index_entry.section_id is not None and self.index_entry.section_heading is not None:
+				breadcrumblist.append(
+					{
+					"@type": "ListItem",
+					"position": len(breadcrumblist) + 1,
+					"item": {
+						"@id": site_url + "#" + self.index_entry.section_id,
+						"name": self.index_entry.section_heading
+						}
+					})
+
+			# this document itself
+			breadcrumblist.append({
+				"@type": "ListItem",
+				"position": len(breadcrumblist) + 1,
+				"item": {
+					"@id": page_url,
+					"name": self.index_entry.title
+					}
+				})
+
+			linked_data.append({
 				"@context": "http://schema.org",
 				"@type": "BreadcrumbList",
-				"itemListElement": [
-					{	"@type": "ListItem",
-						"position": 1,
-						"item": {
-							"@id": site_url + "#" + self.index_entry.section_hash,
-							"name": self.index_entry.section_name
-							}
-						},
-					{	"@type": "ListItem",
-						"position": 2,
-						"item": {
-							"@id":page_url,
-							"name": self.index_entry.title
-							}
-						}
-					]
-				}
-			linked_data.append(breadcrumbs)
+				"itemListElement": breadcrumblist,
+				})
 
-		script = E.script({'type':'application/ld+json'})
-		script.text = "\n" + json.dumps(linked_data, indent=2, sort_keys=True) + "\n"
-		script.tail = "\n"
-		self.html_head.append(script)
+		if len(linked_data) > 0:
+			script = E.script({'type':'application/ld+json'})
+			script.text = "\n" + json.dumps(linked_data, indent=2, sort_keys=True) + "\n"
+			script.tail = "\n"
+			self.html_head.append(script)
 
 	# Go through the generated HTML, identify speaking table cells, load the
 	# JavaScript and CSS resources required, and hook the cells up.
@@ -1466,10 +1540,10 @@ class Odt2Html(object):
 			if el.attrib.get('type') == "text/css" and el.text is not None:
 				el.text = cssmin(el.text)
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Take the HTML BODY object in RAM, wrap it in an HTML element,
 	# added a HEAD, and write it out to disk.
-	#============================================================================
+	#------------------------------------------------------------------
 	def save_html(self, html_filename):
 		# Write the HTML tree to a file
 		outfh = open(html_filename, "w")
@@ -1478,13 +1552,13 @@ class Odt2Html(object):
 		html_elementtree.write(outfh, encoding="utf-8", pretty_print=True, method="html")
 		outfh.close()
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Create an EPUB file. An EPUB file is a zip file containing:
 	# * The document as one or more XHTML files
 	# * Images
 	# * An XML table of contents
 	# * A few other metadata files
-	#============================================================================
+	#------------------------------------------------------------------
 	def save_epub(self, epub_filename):
 		epub = zipfile.ZipFile(epub_filename, 'w')
 		epub_uuid = uuid.uuid4().urn
@@ -1688,9 +1762,9 @@ class Odt2Html(object):
 
 		return text
 
-	#============================================================================
+	#------------------------------------------------------------------
 	# Utility functions
-	#============================================================================
+	#------------------------------------------------------------------
 
 	# Is this element empty of text and children?
 	def element_empty(self, el):
@@ -2387,7 +2461,7 @@ if __name__ == "__main__":
 		elif sys.argv[1].startswith("--nav-names="):
 			opts.nav_names = sys.argv[1][12:].split(",")
 		elif sys.argv[1].startswith("--index="):
-			opts.index = Odt2HtmlIndex(sys.argv[1][8:])
+			opts.indexes.append(Odt2HtmlIndex(sys.argv[1][8:]))
 		elif sys.argv[1].startswith("--template="):
 			opts.template = sys.argv[1][11:]
 			assert os.path.isfile(opts.template)
