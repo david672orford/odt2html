@@ -1,9 +1,9 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Last modified: 21 December 2018
+# Last modified: 3 January 2019
 #
-# Copyright 2014--2018, Trinity College Computing Center
+# Copyright 2014--2019, Trinity College Computing Center
 # This file is part of Odt2html.
 #
 # Odt2html is free software: you can redistribute it and/or modify
@@ -185,7 +185,7 @@
 # should actually be two values separated by a colon:
 # * A two-letter language code. If a table cell starts with a run of text
 #   marked as being in this language, it is considered to be an candidate for
-#   a speaking table cell.
+#   a speaking table cell. (You may used an asterisk as a wildcard.)
 # * A file system path relative to the ODT file. It should point either to a
 #   directory or to an Audacity labels file with an extension of .txt.
 #   * directory: must contain audio files in both MP3 and OGG format with names
@@ -1471,7 +1471,7 @@ class Odt2Html(object):
 
 		for td in self.html_body.xpath(".//td"):
 			for el in ((td,) + tuple(td)):		# Iterate through the <TD> and its immediate children
-				if el.attrib.get("lang") == td_sound_lang:
+				if el.attrib.get("lang") == td_sound_lang or td_sound_lang == "*":
 					text = self.element_extract_text(el).strip()
 					if text:
 						url = td_sound_finder.find(text)
@@ -2367,6 +2367,7 @@ class Odt2HtmlImage(object):
 # TD Sound
 #============================================================================
 
+# Audacity label file with the labels in the order in which they will be used
 class LabelSoundFinder(object):
 	def __init__(self, output_dirname, soundfile_basename):
 		self.output_dirname = output_dirname
@@ -2378,6 +2379,7 @@ class LabelSoundFinder(object):
 				assert re.match(r'^\d+\.\d+$', start)
 				assert re.match(r'^\d+\.\d+$', stop)
 				self.labels.append([text, "t=%s,%s" % (start, stop)])
+		print("labels:", self.labels)
 	def find(self, text):
 		text = text.replace(u"\u0301","")	# Remove stress marks.
 		text = text.replace(u"ё", u"е")		# Audacity will not accept ё
@@ -2387,6 +2389,7 @@ class LabelSoundFinder(object):
 		else:
 			return None
 
+# Directory of individual sound files
 class DirSoundFinder(object):
 	def __init__(self, output_dirname, td_sound_dir):
 		self.output_dirname = output_dirname
