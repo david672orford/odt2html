@@ -1,7 +1,7 @@
 #! /usr/bin/python
 # encoding=utf-8
 # odt2html
-# Last modified: 3 January 2019
+# Last modified: 26 September 2019
 #
 # Copyright 2014--2019, Trinity College Computing Center
 # This file is part of Odt2html.
@@ -340,9 +340,9 @@ class Odt2HtmlIndexedArticle(object):
 
 class Odt2HtmlIndex(dict):
 	def __init__(self, filename):
-		self.filename = filename
-		self.site_name = None			# unused
-		self.site_url = None			# unused
+		self.filename = filename		# HTML file from which this index was loaded
+		self.site_name = None			# FIXME: set but unused
+		self.site_url = None			# FIXME: set but unused
 		self.publisher = None
 		self.author = None
 		self.breadcrumblist = []
@@ -404,8 +404,11 @@ class Odt2HtmlIndex(dict):
 				if item['@type'] == "BreadcrumbList":
 					self.breadcrumblist = item['itemListElement']
 
+		if self.site_name is None and len(self.breadcrumblist) == 0:
+			print("Warning: index \"%s\" lacks Schema.org metadata" % self.filename)
+
 	def __str__(self):
-		return "<Odt2HtmlIndex filename=\"%s\">" % self.filename
+		return "<Odt2HtmlIndex filename=\"%s\", %d entries>" % (self.filename, len(self.keys()))
 
 #============================================================================
 # This does the actual conversion from ODT to HTML
@@ -439,9 +442,13 @@ class Odt2Html(object):
 		# indexes specified with --index= options.
 		for index in self.opts.indexes:
 			search_filename = output_filename
-			if index.dirname != "" and search_filename.startswith(index.dirname):
-				search_filename = search_filename[len(index.dirname):]
+			#print(" index.dirname:", index.dirname)
 			#print(" search_filename:", search_filename)
+			if index.dirname != "":
+				if search_filename.startswith(index.dirname):
+					search_filename = search_filename[len(index.dirname):]
+				else:		# FIXME: this is a hack
+					search_filename = "../" + search_filename
 			self.index_entry = index.get(search_filename)
 			if self.index_entry is not None:
 				break
@@ -812,10 +819,10 @@ class Odt2Html(object):
 			html_el = None
 
 		elif odt_el.tag == "alphabetical-index-mark":			# zero width index entry mark
-			print("  Index mark:", str(odt_el.attrib), odt_el.tail)
+			#print("  Index mark:", str(odt_el.attrib), odt_el.tail)
 			html_el = self.convert_index_mark(odt_el)
 		elif odt_el.tag == "alphabetical-index-mark-start":		# start of index entry span
-			print("  Index mark start:", str(odt_el.attrib), odt_el.tail)
+			#print("  Index mark start:", str(odt_el.attrib), odt_el.tail)
 			html_el = self.convert_index_mark(odt_el)
 		elif odt_el.tag == "alphabetical-index-mark-end":		# end of entry span
 			html_el = E.span({"dropme":odt_el.tag})
@@ -914,19 +921,22 @@ class Odt2Html(object):
 				#html_el = E.br()
 				html_el.append(E.br())
 
-			# If this is a table, create a <tbody> and move the non-header
-			# rows into it. We have to do this to pass XHTML 1.1 validation.
 			if html_el.tag == "table":
+				# Create a <tbody> and move the non-header rows into it.
+				# We have to do this to pass XHTML 1.1 validation.
 				tbody = E.tbody()
 				for child in list(html_el):
 					if child.tag == "tr":
 						html_el.remove(child)
 						tbody.append(child)
 				html_el.append(tbody)
-				# Enclose the entire table in a <div>. On some browsers
-				# (can't remember which ones) max-width will not work
-				# on the table itself.
-				html_el = E.div(html_el, {'class':'restrain'})
+
+				# Wrap the table in a DIV 
+				restraint = E.div(html_el, {'class':'restrain'})
+				table_css_style = self.styles._by_css_class(html_el.attrib['class'])
+				if table_css_style.properties.get('clear') == 'both':
+					restraint.attrib['style'] = 'clear: both'	
+				html_el = restraint
 
 			# There are some empty ODF tags which we want to ignore, but we 
 			# cannot ignore them completely because they can come inside runs
@@ -2059,18 +2069,16 @@ class OdtStyle2Css(object):
 						css_style.properties["text-decoration"] = "line-through"
 
 				elif el.tag == "table-properties":
-					if "width" in el.attrib:
-						width = el.attrib["width"]
-						# If the table is wide enough to reach what are probably the margins,
-						# assume the intent was to make it 100% wide.
-						if self.dimension2points(width) > (7.0 * 72.0):
-							css_style.properties["width"] = "100%"
-							css_style.properties["clear"] = "both"
-						# Otherwise, use the stated width, but limit it to 100%.
-						else:
-							css_style.properties["max-width"] = width
-					else:	# If no width was specified, it is explicitly a 100% wide table.
+					width = el.attrib.get("width")
+					# If the table is width is "auto" or has an explicit width wide enough
+					# to reach the likely margins, assume the intent was to make it 100% wide.
+					if self.dimension2points(width) > (7.0 * 72.0):
 						css_style.properties["width"] = "100%"
+						css_style.properties["clear"] = "both"
+					# Otherwise, use the requested width, but make it the maxiumum
+					# width so that the table can shrink in small displays.
+					else:
+						css_style.properties["max-width"] = width
 
 					if "align" in el.attrib:
 						align = el.attrib["align"]
@@ -2234,9 +2242,11 @@ class OdtStyle2Css(object):
 	def _by_css_class(self, css_class):
 		if css_class is None:
 			return None
-		class_name = css_class.split(" ")[0].replace("_",".")
+		class_name = css_class.split(" ")[0]
 		if class_name == "":
 			return None
+		if not class_name in self.styles_byname:	# hack "Table1_A" back to "Table1.A"
+			class_name = class_name.replace("_",".")
 		return self.styles_byname[class_name]
 
 	def get_break_before(self, style_name):
@@ -2336,12 +2346,16 @@ class Odt2HtmlImage(object):
 				return out_fh.getvalue()
 			else:
 				tree = ET.parse(self.odt.open(self.original_filename))
+				# FIXME: not sure why we need to take a list here. Also, shouldn't there
+				# be just one element, namely <svg>?
 				for el in list(tree.iter()):
 					self.prune_svg(el)
 				return ET.tostring(tree, pretty_print=pretty_print, encoding="utf-8")	# yes, utf-8
 		else:
 			return self.odt.open(self.original_filename).read()
 
+	# Remove SVG elements and attributes inserted by Inkscape but which are
+	# not needed for display in a web browser.
 	def prune_svg(self, element):
 		for key in element.attrib.keys():
 			if key.startswith("{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"):
