@@ -1,9 +1,9 @@
-#! /usr/bin/python
+#! /usr/bin/python3
 # encoding=utf-8
 # odt2html
-# Last modified: 26 September 2019
+# Last modified: 8 May 2020
 #
-# Copyright 2014--2019, Trinity College Computing Center
+# Copyright 2014--2020, Trinity College Computing Center
 # This file is part of Odt2html.
 #
 # Odt2html is free software: you can redistribute it and/or modify
@@ -174,6 +174,10 @@
 # The video player pops up in the middle of the window. It has a title bar
 # with download links and a close button. It can be dragged around the screen.
 #
+# If you have media files in multiple formats or video resolutions, you should
+# create a manifest file using odt2html-media-manifest and point the hyperlink
+# to that.
+#
 # == Speaking Table Cells ==
 #
 # Table cells which contain foreign language phrases can be made to play audio
@@ -249,11 +253,6 @@ from __future__ import print_function
 import zipfile
 import sys
 import os
-import lxml.etree as ET	
-from lxml.builder import E		# FIXME: should be lxml.html.builder
-import lxml.html
-import urllib
-import urlparse
 import re
 import textwrap
 import uuid
@@ -263,7 +262,21 @@ import codecs
 import json
 from rcssmin import cssmin
 from PIL import Image
-from urllib import quote, unquote
+from base64 import b64encode
+
+import lxml.etree as ET	
+from lxml.builder import E
+import lxml.html
+
+# Python 2
+#from urlparse import urlparse
+#from urllib import quote, unquote
+#from urllib import url2pathname
+
+# Python 3
+from urllib.parse import urlparse
+from urllib.parse import quote, unquote
+from urllib.request import url2pathname
 
 #============================================================================
 # Container for configuration (mainly from the command line)
@@ -369,7 +382,7 @@ class Odt2HtmlIndex(dict):
 			for anchor in section.xpath(".//a"):
 				href = anchor.attrib.get('href')
 				if href:
-					filename = unquote(href).decode("utf-8")
+					filename = unquote(href)
 					self[filename] = Odt2HtmlIndexedArticle(self, section_id, section_heading, anchor.text_content().strip())
 
 		# Collect site metadata from the index itself.
@@ -460,7 +473,7 @@ class Odt2Html(object):
 			if self.opts.wrap_tables:
 				self.wrap_tables()
 			if self.opts.site_url is not None:
-				page_url = self.opts.site_url + urllib.quote(output_filename.encode("utf-8"))
+				page_url = self.opts.site_url + quote(output_filename)
 				self.add_opengraph(self.opts.site_url, page_url)
 				self.add_schema_org(self.opts.site_url, page_url)
 			self.embed_javascript()
@@ -564,7 +577,7 @@ class Odt2Html(object):
 		# Pass 2: convert the document and append it to the HTML body
 		self.section_count = 0
 		for odt_el in odt_body:
-			self.convert_element(odt_el, self.html_body, None)
+			self.convert_element(odt_el, self.html_body, None)		# calls self recursively
 
 		# Convert the footer and add it to the body
 		odt_footer = styles_xml.xpath("/document-styles/master-styles/master-page[@name='Standard']/footer/p")
@@ -636,7 +649,6 @@ class Odt2Html(object):
 				el.attrib[short_name] = value
 
 		if self.opts.debug:
-			#print ET.tostring(tree, pretty_print=True, encoding="utf-8").decode("utf-8")
 			print(ET.tostring(tree, pretty_print=True, encoding="unicode"))
 
 		return tree
@@ -683,7 +695,8 @@ class Odt2Html(object):
 	# of the ODT element with the newly created HTML element as the 
 	# target parent.
 	def convert_element(self, odt_el, html_parent_el, list_style_name):
-		convert_children = True
+
+		convert_children = True					# call self recursively on children
 
 		style_name = odt_el.attrib.get('style-name')
 
@@ -858,6 +871,8 @@ class Odt2Html(object):
 			#html_el = E.span()
 			raise OdfNotImplementedYet("unimplemented tag: %s" % odt_el.tag)
 
+		# If we converted the ODF element to an HTML element 
+		# (rather than simply dropping it),
 		if html_el is not None:
 			if odt_el.text is not None:				# transfer text within tags
 				html_el.text = odt_el.text
@@ -879,7 +894,7 @@ class Odt2Html(object):
 							self.html_body.append(E.hr({"class":"pagebreak"}))
 
 			if convert_children:
-				# Call this function recursively to convert the children.
+				# Call the current function recursively to convert the ODT tag's children.
 				for child in odt_el:
 					self.depth += 1
 					self.convert_element(child, html_el, list_style_name)
@@ -912,15 +927,18 @@ class Odt2Html(object):
 				# sense. It also will not be rendered correctly on iPad browsers.
 				for child in html_el:
 					if child.tag == "span" and child.text == u"\u0301":
-						raise OdtBadFormatting("Spurious stress mark span")
+						raise OdfBadFormatting("Spurious stress mark span")
 						print("  Warning: spurious stress mark span")
 
-			# If a <P> tag is completely empty, put a <BR> tag into it because
-			# in HTML 4 empty <P> tags are supposed to be ignored.
+			# If this is a <p> tag, examine it now that its children (if any)
+			# have been converted. If it is completely empty, put a <BR> tag
+			# into it because in HTML 4 empty <P> tags are supposed to be ignored.
 			if odt_el.tag == "p" and self.element_empty(html_el):
 				#html_el = E.br()
 				html_el.append(E.br())
 
+			# If conversion yielded a <table> tag, perform more processing now
+			# that its children have been converted.
 			if html_el.tag == "table":
 				# Create a <tbody> and move the non-header rows into it.
 				# We have to do this to pass XHTML 1.1 validation.
@@ -931,11 +949,23 @@ class Odt2Html(object):
 						tbody.append(child)
 				html_el.append(tbody)
 
-				# Wrap the table in a DIV 
+				# Wrap the <table> in a <div> since this seems the only way we can
+				# restrict its width on all browsers.
 				restraint = E.div(html_el, {'class':'restrain'})
-				table_css_style = self.styles._by_css_class(html_el.attrib['class'])
-				if table_css_style.properties.get('clear') == 'both':
+
+				# If the previous element is <h*>, then wrap it and the wrapper <div>
+				# in still another wrapper <div> so that 'clear: both' will push them
+				# both down.
+				if len(html_parent_el) >= 1:
+					sibling = html_parent_el[-1]
+					if sibling.tag.startswith("h"):			# FIXME: use regexp
+						html_parent_el.remove(sibling)
+						restraint = E.div(sibling, restraint)
+
+				# If "clear: both" is set in the table's style, set it in the wrapper DIV too.
+				if self.styles._by_css_class(html_el.attrib['class']).properties.get('clear') == 'both':
 					restraint.attrib['style'] = 'clear: both'	
+
 				html_el = restraint
 
 			# There are some empty ODF tags which we want to ignore, but we 
@@ -970,122 +1000,16 @@ class Odt2Html(object):
 				for i in range(int(odt_el.attrib.get('number-columns-repeated', 1)) - 1):
 					html_parent_el.append(copy.deepcopy(html_el))
 
-	# This is broken out as a function because convert_element() was getting to long.
+		return
+
+	# Called from convert_element() when it encounters an <a> tag
 	def convert_hyperlink(self, odt_el):
 		assert odt_el.tag == 'a'
 		href = odt_el.attrib["href"]
 		target = odt_el.attrib.get("target-frame-name")
 
-		# We provide a special target called "player" which plays an audio or
-		# video file in a popup player. This target type is our own invention
-		# but it is compatible with the ODF specification.
 		if target == "player":
-			if self.opts.debug:
-				print("Player:", href)
-
-			# Mime types supported by the player
-			file_exts = {
-				'.mp3': ('audio', 'audio/mpeg'),
-				'.ogg': ('audio', 'audio/ogg'),
-				'.mp4': ('video', 'video/mp4'),
-				'.webm': ('video', 'video/webm')
-				}
-
-			# Link described as a "Document" link in Libreoffice. This is a link
-			# to a local file (that is, on the same server). We can recognize
-			# these links because they always start with a double
-			if href.startswith("../"):
-				# Since the double dot represents the ODF file as a ZIP container, we drop it.
-				filename = unquote(href[3:])
-				path_from_cwd = os.path.join(self.output_dirname, filename).encode("utf-8")
-				ext = os.path.splitext(filename)[1].lower()
-
-				# Media manifest file such as created by odt2html-media-manifest?
-				if ext == ".json":
-					if self.opts.debug:
-						print("  There is a pre-generated media manifest")
-					with open(path_from_cwd) as f:
-						manifest = json.load(f)
-					manifest['basedir'] = urllib.quote(os.path.dirname(filename))
-
-				# Otherwise is is presumably a bare media file
-				else:
-					if self.opts.debug:
-						print("  Media is in local files")
-					mediatype, mimetype = file_exts[ext]
-					manifest = {
-						'basedir': urllib.quote(os.path.dirname(filename).encode("utf-8")),
-						'title': self.element_extract_text(odt_el),
-						mediatype: [
-							{
-							'mimetype': mimetype,
-							'src': urllib.quote(os.path.basename(filename.encode("utf-8"))),
-							'filesize': os.path.getsize(path_from_cwd),
-							'aspect_ratio': '4:3'
-							}]
-						}
-
-			# Link to Youtube video
-			elif "www.youtube.com/watch?v=" in href:
-				if self.opts.debug:
-					print("  Media is a video on Youtube")
-
-				# Extract Youtube video ID from the URL
-				m = re.search(r'v=(.+)$', href)
-				if not m:
-					raise OdtBadPlayer("Failed to parse Youtube link")
-
-				manifest = {
-					'title': self.element_extract_text(odt_el),
-					'youtube': m.group(1)
-					}
-
-			# Other "Internet" link
-			elif re.search(r"^https?:", href, re.I):
-				if self.opts.debug:
-					print("  Media is in a remote file")
-
-				# MIME type from extension
-				path = urlparse.urlparse(href).path
-				ext = os.path.splitext(path)[1].lower()
-				mediatype, mimetype = file_exts[ext]
-
-				manifest = {
-					mediatype: [
-						{
-						'mimetype': mimetype,
-						'src': href,
-						}]
-					}
-
-			# Some other kind of link
-			else:
-				raise OdfBadPlayer("Unsupported URL: %s" % filename)
-
-			# If the name of the linked image is in the format "PlayX", there
-			# ought to be a cooresponding section named "TextX". Save the "X"
-			# part so that the player can move a hightlighter through it.
-			link_name = odt_el.attrib.get("name")
-			if link_name and link_name.startswith('Play'):
-				manifest['player_id'] = link_name[4:]	
-
-			# Manifest is finished.
-			if self.opts.debug:
-				for line in json.dumps(manifest, indent=4, separators=(',',':')).split("\n"):
-					print("  %s" % line)
-
-			# Create the <A> element. It identifies the recording by playlist index number.
-			# As soon as we have done that we add the recording to the playlist.
-			# Order is important here!
-			html_el = E.a({
-				'class':'play_link',
-				'href':'javascript:play(%d)' % len(self.playlist)
-				})
-			if 'title' in manifest:
-				html_el.attrib['title'] = manifest['title']
-			self.playlist.append(manifest)
-
-		# Value of "target" attribute is other than "player"
+			html_el = self.convert_player(odt_el, href)
 		else:
 			#print("  href: %s" % href)
 			if href.startswith("http:"):				# Internet link
@@ -1103,7 +1027,7 @@ class Odt2Html(object):
 						href = "#%s" % self.subdocs_by_href[href_html]
 				else:
 					# Make sure target file (likely an ODT or HTML file) exists
-					fs_path = os.path.join(os.path.dirname(self.odt_filename), urllib.url2pathname(href[3:]))
+					fs_path = os.path.join(os.path.dirname(self.odt_filename), url2pathname(href[3:]))
 					fs_path = fs_path.encode("utf-8")	# FIXME: assumes file system encoding is UTF-8
 					if not os.path.exists(fs_path):
 						print("  Warning: broken link: %s" % fs_path)
@@ -1126,6 +1050,138 @@ class Odt2Html(object):
 
 		html_el.tail = ""
 		return html_el
+
+	# We provide a special hyperlink target called "player" which plays an audio
+	# or video file in a popup player. This target type is our own invention but
+	# it is compatible with the ODF specification.
+	def convert_player(self, odt_el, href):
+		if self.opts.debug:
+			print("Player:", href)
+
+		# If the href begins with "../", it points to a local file outside
+		# the ODF file. Such hrefs are described as a "Document" links in
+		# the Libreoffice GUI. The ".." reprents a move up from inside the
+		# ZIP file.
+		if href.startswith("../"):
+
+			# drop "../", remove URL quoting to get unicode
+			filename = unquote(href[3:])
+
+			# FIXME: how exactly does this work?
+			path_from_cwd = os.path.join(self.output_dirname, filename)
+
+			# If it is a JSON files, we assume it is a media manifest file such as
+			# created by our odt2html-media-manifest tool.
+			if os.path.splitext(filename)[1].lower() == ".json":
+				if self.opts.debug:
+					print("  Play from a pre-generated media manifest")
+				with open(path_from_cwd) as f:
+					manifest = json.load(f)
+				manifest['basedir'] = quote(os.path.dirname(filename))
+				if not ("audio" in manifest or "video" in manifest):
+					raise OdfBadPlayer("Media manifest %s is empty" % path_from_cwd)
+
+			# Otherwise is is presumably a bare media file. We will create
+			# a minimimal manifest for it.
+			else:
+				if self.opts.debug:
+					print("  Play a single local file")
+				mediatype, mimetype = self.filetype_from_filename(filename)
+				manifest = {
+					'basedir': quote(os.path.dirname(filename)),
+					'title': self.element_extract_text(odt_el),
+					mediatype: [
+						{
+						'mimetype': mimetype,
+						'src': quote(os.path.basename(filename)),
+						'filesize': os.path.getsize(path_from_cwd),
+						'aspect_ratio': '4:3'
+						}]
+					}
+
+		# Link to Youtube video
+		elif "www.youtube.com/watch?v=" in href:
+			if self.opts.debug:
+				print("  Play a video on Youtube")
+
+			# Extract Youtube video ID from the URL
+			m = re.search(r'v=(.+)$', href)
+			if not m:
+				raise OdfBadPlayer("Failed to parse Youtube link")
+
+			manifest = {
+				'title': self.element_extract_text(odt_el),
+				'youtube': m.group(1)
+				}
+
+		# Other "Internet" link
+		elif re.search(r"^https?:", href, re.I):
+			if self.opts.debug:
+				print("  Media is in a remote file")
+
+			mediatype, mimetype = self.filetype_from_url(href)
+			manifest = {
+				mediatype: [
+					{
+					'mimetype': mimetype,
+					'src': href,
+					}]
+				}
+
+		# Some other kind of link
+		else:
+			raise OdfBadPlayer("Unsupported URL: %s" % filename)
+
+		# If the name attribute of the link tag is in the format "PlayX",
+		# there ought to be a corresponding ODF section named "TextX". Save
+		# the "X" part so that the player can move a hightlighter through
+		# the text as the recording plays.
+		link_name = odt_el.attrib.get("name")
+		if link_name and link_name.startswith('Play'):
+			manifest['player_id'] = link_name[4:]	
+
+		# Manifest is finished.
+		if self.opts.debug:
+			for line in json.dumps(manifest, indent=4, separators=(',',':'), ensure_ascii=False).split("\n"):
+				print("  %s" % line)
+
+		# Create the <A> element. It identifies the recording by playlist index number.
+		# As soon as we have done that we add the recording to the playlist.
+		# Order is important here!
+		html_el = E.a({
+			'class':'play_link',
+			'href':'javascript:play(%d)' % len(self.playlist)
+			})
+		if 'title' in manifest:
+			html_el.attrib['title'] = manifest['title']
+		self.playlist.append(manifest)
+
+		return html_el
+
+	# File types supported by our embedded player
+	playable_file_extensions = {
+		'.mp3': ('audio', 'audio/mpeg'),
+		'.ogg': ('audio', 'audio/ogg'),
+		'.mp4': ('video', 'video/mp4'),
+		'.webm': ('video', 'video/webm')
+		}
+
+	def filetype_from_filename(self, filename):
+		ext = os.path.splitext(filename)[1].lower()
+		return file_extensions[ext]
+		return self.filetype_from_ext(ext, filename)
+
+	def filetype_from_url(self, url):
+		path = urlparse(url).path
+		ext = os.path.splitext(path)[1].lower()
+		return self.filetype_from_ext(ext, url)
+
+	def filetype_from_ext(self, ext, url):
+		if ext == '':
+			raise AssertionError("Filename has no extension: %s" % url)
+		if not ext in self.playable_file_extensions:
+			raise AssertionError("Extension %s not supported by player: %s" % url)
+		return self.playable_file_extensions[ext]
 
 	# Marks alphabetical index entry
 	def convert_index_mark(self, odt_el):
@@ -1204,7 +1260,8 @@ class Odt2Html(object):
 			# http://www.websiteoptimization.com/speed/tweak/inline-images/
 			image_data = image.get_data(pretty_print=False)
 			#print("  Data URL for %s: %d bytes" % (image.filename, len(image_data)))
-			return "data:%s;base64,%s" % (image.mimetype, image_data.encode("base64"))
+			#return "data:%s;base64,%s" % (image.mimetype, image_data.encode("base64"))
+			return "data:%s;base64,%s" % (image.mimetype, b64encode(image_data).decode("ascii"))
 		else:
 			self.images.append(image)
 			return image.filename
@@ -1228,7 +1285,7 @@ class Odt2Html(object):
 
 			script = E.script(
 				{'type':'text/javascript'},
-				"\nvar playlist=" + json.dumps(self.playlist, indent=1, separators=(',',':')) + ";\n"
+				"\nvar playlist=" + json.dumps(self.playlist, indent=2, separators=(',',':'), ensure_ascii=False) + ";\n"
 				)
 			script.tail = "\n"
 			self.html_head.append(script)
@@ -1388,7 +1445,7 @@ class Odt2Html(object):
 			if 'description' in self.metadata:
 				self.html_head.xpath("./meta[@name='description']")[0].attrib['property'] = "og:description"
 			self.html_head.append(E.meta({'property':'og:url','content':page_url}))
-			self.html_head.append(E.meta({'property':'og:image','content':site_url + urllib.quote(self.metadata['og:image'].encode("utf-8"))}))
+			self.html_head.append(E.meta({'property':'og:image','content':site_url + quote(self.metadata['og:image'])}))
 			with Image.open(self.metadata['og:image']) as img:
 				width, height = img.size
 			self.html_head.append(E.meta({'property':'og:image:width','content':str(width)}))
@@ -1417,7 +1474,7 @@ class Odt2Html(object):
 				"headline": self.metadata['title'],
 				"mainEntityOfPage": page_url,
 				"image": [
-					site_url + urllib.quote(self.metadata['og:image'].encode("utf-8"))
+					site_url + quote(self.metadata['og:image'])
 					],
 				"publisher": index.publisher,
 				"author": index.author,
@@ -1516,7 +1573,7 @@ class Odt2Html(object):
 				table_css_style.template = "DIV.%s"
 				if 'max-width' in table_css_style.properties:
 					del table_css_style.properties['max-width']
-	 			boxes = []
+				boxes = []
 				for el in table:
 					if el.tag == "tbody":
 						for tr in el:
@@ -1555,12 +1612,10 @@ class Odt2Html(object):
 	# added a HEAD, and write it out to disk.
 	#------------------------------------------------------------------
 	def save_html(self, html_filename):
-		# Write the HTML tree to a file
-		outfh = open(html_filename, "w")
-		outfh.write("<!DOCTYPE HTML>\n")
-		html_elementtree = ET.ElementTree(element=E.html({"lang":self.styles.default_language}, self.html_head, self.html_body))
-		html_elementtree.write(outfh, encoding="utf-8", pretty_print=True, method="html")
-		outfh.close()
+		with open(html_filename, "wb") as outfh:
+			outfh.write(b"<!DOCTYPE HTML>\n")
+			html_elementtree = ET.ElementTree(element=E.html({"lang":self.styles.default_language}, self.html_head, self.html_body))
+			html_elementtree.write(outfh, encoding="utf-8", pretty_print=True, method="html")
 
 	#------------------------------------------------------------------
 	# Create an EPUB file. An EPUB file is a zip file containing:
@@ -1797,7 +1852,7 @@ class Odt2Html(object):
 		href = re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)		# change extension
 		href = re.sub(r'/index\.html$', '/', href, flags=re.IGNORECASE)		# drop explicit index.html
 		# see https://tools.ietf.org/html/rfc3986#section-3.3
-		href = quote(unquote(href).encode("utf-8"), safe="/~!$&'()*+,;=:@")
+		href = quote(unquote(href), safe="/~!$&'()*+,;=:@")
 		return href
 
 	# Insert CSS styles into the head of the document.
@@ -1999,6 +2054,7 @@ class OdtStyle2Css(object):
 									css_style.properties[prop] = el2.attrib[prop]
 									css_style.properties["-webkit-%s" % prop] = el2.attrib[prop]
 									css_style.properties["-moz-%s" % prop] = el2.attrib[prop]
+									css_style.properties["clear"] = "both"		# looks better this way
 
 				# To text blocks
 				elif el.tag == "paragraph-properties":
@@ -2139,7 +2195,7 @@ class OdtStyle2Css(object):
 					css_style.name = css_style.name.split(".")[0]	# drop the cell part of the name
 
 			if self.opts.debug:
-				print("    -->%s" % unicode(css_style))
+				print("    -->%s" % str(css_style))
 
 			# Add to list of all styles.
 			self.styles_ordered.append(css_style)
@@ -2385,9 +2441,9 @@ class Odt2HtmlImage(object):
 class LabelSoundFinder(object):
 	def __init__(self, output_dirname, soundfile_basename):
 		self.output_dirname = output_dirname
-		self.base_url = urllib.quote(soundfile_basename.encode("utf-8"))
+		self.base_url = quote(soundfile_basename)
 		self.labels = []
-		with codecs.open(os.path.join(self.output_dirname, "%s.txt" % soundfile_basename), "r", "utf-8") as f:
+		with open(os.path.join(self.output_dirname, "%s.txt" % soundfile_basename), "r", encoding="utf-8") as f:
 			for line in f:
 				start, stop, text = line.rstrip().split("\t")
 				assert re.match(r'^\d+\.\d+$', start)
@@ -2420,7 +2476,7 @@ class DirSoundFinder(object):
 			if os.path.exists("%s/%s.ogg" % (self.output_dirname, filename)) and os.path.exists("%s/%s.mp3" % (self.output_dirname, filename)):
 				#url = "%s/%s.ogg" % (self.output_dirname, filename)
 				url = "%s.ogg" % filename
-				return urllib.quote(url.encode("utf-8"))
+				return quote(url)
 		return None
 
 #============================================================================
@@ -2444,15 +2500,15 @@ class OdfBadPlayer(Exception):
 	pass
 
 # Formatting that will not translate well
-class OdtBadFormatting(Exception):
+class OdfBadFormatting(Exception):
 	pass
 
 #============================================================================
 # Main
 #============================================================================
 if __name__ == "__main__":
-	sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
-	sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
+	#sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
+	#sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
 
 	verbose = False
 	force = False
@@ -2501,7 +2557,6 @@ if __name__ == "__main__":
 	count_built = 0
 	count_rebuilt = 0
 	for filename in sys.argv[1:]:
-		filename = filename.decode("utf-8")		# FIXME: why do we have to do this?
 		if verbose:
 			print(u"\"%s\"" % filename)
 		filename_mtime = os.path.getmtime(filename)
@@ -2540,16 +2595,16 @@ if __name__ == "__main__":
 			try:
 				Odt2Html(filename, output_filename, opts)
 			except OdfNotImplementedYet as e:
-				sys.stderr.write("ODF feature not implemented: %s\n" % unicode(e))
+				sys.stderr.write("ODF feature not implemented: %s\n" % str(e))
 				sys.exit(1)
 			except OdfNotSupported as e:
-				sys.stderr.write("Change unsupported formatting: %s\n" % unicode(e))
+				sys.stderr.write("Change unsupported formatting: %s\n" % str(e))
 				sys.exit(1)
 			except OdfInvalid as e:
-				sys.stderr.write("ODT file is invalid: %s\n" % unicode(e))
+				sys.stderr.write("ODT file is invalid: %s\n" % str(e))
 				sys.exit(1)
 			except OdfBadPlayer as e:
-				sys.stderr.write("Bad player variable: %s\n" % unicode(e))
+				sys.stderr.write("Bad player: %s\n" % str(e))
 				sys.exit(1)
 
 			# Make the creation time of the HTML file one millisecond after the
