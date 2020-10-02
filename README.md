@@ -10,22 +10,22 @@ such a function. Instead it is intended to be used with documents which
 were formatted with eventual conversion to HTML in mind. With care documents
 can be formatted so that they will look good both in print and on the web.
 
-## Usage ==
+## Usage
 
-   odt2html [--debug] [--force] [--epub] <filename.odt>...
+    odt2html [--debug] [--force] [--epub] <filename.odt>...
  
-    --verbose                     show what files are being processed
-    --debug                       print debug messages
-    --force                       regenerate the output file even if the input file is
-                                  not newer
-    --epub                        break the output into one HTML file per section and
-                                  wrap them in an EPUB file
-    --template=<filename>         skeletal HTML file into which to insert converted document
-    --site-name=<text>            name of website for Opengraph metadata
-    --site-url=<url>              base URL of site for constructing page URLs
-    --index=<filename>            get site metadata and first breadcrumb from this file
-    --nav-names=<list>            names of ODF frames which should be <nav> rather than <div>
-    --player-lib-dir=<directory>  where are the media player files?
+      --verbose                     show what files are being processed
+      --debug                       print debug messages
+      --force                       regenerate the output file even if the input file is
+                                    not newer
+      --epub                        break the output into one HTML file per section and
+                                    wrap them in an EPUB file
+      --template=<filename>         skeletal HTML file into which to insert converted document
+      --site-name=<text>            name of website for Opengraph metadata
+      --site-url=<url>              base URL of site for constructing page URLs
+      --index=<filename>            get site metadata and first breadcrumb from this file
+      --nav-names=<list>            names of ODF frames which should be <nav> rather than <div>
+      --player-lib-dir=<directory>  where are the media player files?
 
 Each input ODT file is converted to a single HTML or EPUB file. The output
 file will have the same base name and will be placed in the same directory.
