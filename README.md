@@ -178,13 +178,13 @@ should be two values separated by a colon:
   a speaking table cell. (You may used an asterisk as a wildcard.)
 * A file system path relative to the ODT file. It should point either to a
   directory or to an Audacity labels file with an extension of .txt.
- * If it is a directory, it should contain audio files for each table cell.
-   The names of the files without the extension should match the text of
-   the cooresponding table cell. You should provide files in both MP3 and
-   OGG formats.
- * If its is an Audacity labels file, it should contain labels that match the
-   text in the same order as in the ODT file. There should be one MP3 and one
-   OGG file alongside it with the same base name.
+  * If it is a directory, it should contain audio files for each table cell.
+    The names of the files without the extension should match the text of
+    the cooresponding table cell. You should provide files in both MP3 and
+    OGG formats.
+  * If its is an Audacity labels file, it should contain labels that match the
+    text in the same order as in the ODT file. There should be one MP3 and one
+    OGG file alongside it with the same base name.
 
 If the text in a table cell (though of the correct language) does not match
 a file in the directory specified or the next message in the Audacity labels
