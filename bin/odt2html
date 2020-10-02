@@ -23,42 +23,25 @@
 # Programmer's Notes
 #=============================================================================
 #
-# == Opendocument Standard ==
+# # Opendocument Standard
 # * https://www.oasis-open.org/committees/tc_home.php?wg_abbrev=office
 # * http://docs.oasis-open.org/office/v1.2/OpenDocument-v1.2-part1.html
 #
-# == Python Elementtree and LXML ==
+# # Python Elementtree and LXML
 # * https://docs.python.org/2/library/xml.etree.elementtree.html
 # * http://eli.thegreenplace.net/2012/03/15/processing-xml-in-python-with-elementtree/
 # * http://lxml.de/
 # * http://lxml.de/lxmlhtml.html
 #
-# == Epub ==
+# # Epub
 # * http://idpf.org/epub/201
 # * http://www.manuel-strehl.de/dev/simple_epub_ebooks_with_python.en.html
 # * https://code.google.com/p/python-epub-builder/
 #
-# == Social Networking Tags ==
+# # Social Networking Tags
 # * https://developers.google.com/+/web/snippet/
 # * https://developers.google.com/structured-data/testing-tool/
 #
-# == TODO ==
-# * Mixed ordered/unordered lists are not implemented. Should they be?
-# * Implement document background color
-# * Convert the default paragraph style
-# * Reimplement style simplification:
-#   * Simplify more to make the CSS smaller
-#   * It would be nice if we no longer needed to provide options
-#   * Paragraph styles which are functionally the same as their parents
-#     should be eliminated
-#   * Table cell borders should be simplified only if they are all the same.
-# * Figure out what ODF bookmarks are and whether we should implement them
-# * Drop page numbers from table of contents since they will be wrong even if
-#   the HTML file is printed from a browser
-# * Table styles collide with paragraph styles. To demonstrate, try naming a
-#   table "Heading".
-# * Playing of audio fragments may not work on some browsers if the file is
-#   not encoded with a constant bitrate. Add automatic conformance testing.
 #
 
 from __future__ import print_function
@@ -147,8 +130,10 @@ class Odt2HtmlOptions(object):
 	wrap_tables = True
 
 #============================================================================
-# These two classes represent an HTML index page listing the converted
-# documents. It is used to create backlinks in the converted documents.
+# These two classes are used to load an HTML index pages which the user may
+# choose to provide. We load this index pages so that we can create 
+# backlinks in the converted documents. We also draw metadata from these
+# pages.
 #============================================================================
 
 class Odt2HtmlIndexedArticle(object):

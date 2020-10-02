@@ -14,18 +14,25 @@ can be formatted so that they will look good both in print and on the web.
 
     odt2html [--debug] [--force] [--epub] <filename.odt>...
  
-      --verbose                     show what files are being processed
-      --debug                       print debug messages
-      --force                       regenerate the output file even if the input file is
-                                    not newer
-      --epub                        break the output into one HTML file per section and
-                                    wrap them in an EPUB file
-      --template=<filename>         skeletal HTML file into which to insert converted document
-      --site-name=<text>            name of website for Opengraph metadata
-      --site-url=<url>              base URL of site for constructing page URLs
-      --index=<filename>            get site metadata and first breadcrumb from this file
-      --nav-names=<list>            names of ODF frames which should be <nav> rather than <div>
-      --player-lib-dir=<directory>  where are the media player files?
+      --verbose                     Show what files are being processed
+      --debug                       Print debug messages
+      --force                       Regenerate the output file even if the
+                                    input file is not newer
+      --epub                        Break the output into one HTML file per
+                                    section and wrap them in an EPUB file
+      --template=<filename>         Skeletal HTML file into which to insert
+                                    converted document
+      --index=<filename>            User-provided HTML index of converted
+                                    documents. Used to create "back" links.
+                                    Also transfer Opengraph and Schema.org
+                                    metadata from these indexes to the page.
+      --site-name=<text>            Name of website for Opengraph metadata
+      --site-url=<url>              Base URL of site for constructing page URLs
+      --nav-names=<list>            Names of ODF frames which should be
+                                    converted to <nav> elements rather than
+                                    <div> elements
+      --player-lib-dir=<directory>  Where will the media player files be on
+                                    web server relative to the HTML file?
 
 Each input ODT file is converted to a single HTML or EPUB file. The output
 file will have the same base name and will be placed in the same directory.
