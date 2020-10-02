@@ -1,7 +1,7 @@
 all:
 
 install:
-	cp bin/odt2html /usr/local/bin/odt2html
+	cp bin/* /usr/local/bin/
 
 clean:
 	rm -f tests/test_*.html tests/test_*.epub
