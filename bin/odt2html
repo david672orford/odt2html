@@ -2,7 +2,7 @@
 # encoding=utf-8
 # odt2html
 #
-# Copyright 2014--2020, Trinity College Computing Center
+# Copyright 2014--2021, Trinity College Computing Center
 # This file is part of Odt2html.
 #
 # Odt2html is free software: you can redistribute it and/or modify
@@ -42,7 +42,6 @@
 # * https://developers.google.com/+/web/snippet/
 # * https://developers.google.com/structured-data/testing-tool/
 #
-#
 
 from __future__ import print_function
 import zipfile
@@ -56,6 +55,7 @@ import copy
 import codecs
 import json
 from rcssmin import cssmin
+from rjsmin import jsmin
 from PIL import Image
 from base64 import b64encode
 
@@ -80,7 +80,7 @@ from urllib.request import url2pathname
 class Odt2HtmlOptions(object):
 	debug = False						# --debug
 	output_format = "html"
-	minimize = True
+	minimize = True						# minimize CSS
 	template = None						# --template=
 	site_name = None					# --site-name=
 	site_url = None						# --site-url=
@@ -247,9 +247,10 @@ class Odt2Html(object):
 		self.topic_index_counter = 0
 		self.index_entry = None
 		self.default_language = "XX"
+		self.default_font_family = None
 
-		# Try to find an entry for the converted document in one of the HTML
-		# indexes specified with --index= options.
+		# Search the indexes specified with --index= options looking for
+		# a link to the converted document named in output_filename.
 		for index in self.opts.indexes:
 			search_filename = output_filename
 			#print(" index.dirname:", index.dirname)
@@ -263,6 +264,7 @@ class Odt2Html(object):
 			if self.index_entry is not None:
 				break
 
+		# Perform the conversion
 		if self.opts.output_format == "html":
 			self.load_and_convert()
 			if self.td_sound:
@@ -289,7 +291,7 @@ class Odt2Html(object):
 			self.load_and_convert()
 			self.save_epub(output_filename)
 		else:
-			raise Exception
+			raise AssertionError("Invalid output_format: %s" % self.opts.output_format)
 
 	#------------------------------------------------------------------
 	# Load the style and content XML files into memory and create most of the
@@ -719,13 +721,24 @@ class Odt2Html(object):
 					else:
 						prev_child = child
 
-				# Look for spans containing only a stress mark. Since the stress mark is
-				# a combining character, putting it alone in a span does not make any
-				# sense. It also will not be rendered correctly on iPad browsers.
+				# Look for weird stuff with stress marks. We have seen ODT files with
+				# tags between the character and the stress mark. Since the stress mark
+				# is a combining character, this is an error. This may be a problem with
+				# the handling of spans created to set the language.
+				# We have to detect this problem since iPad browsers will not render
+				# this erroneous sequence as the user intended.
+				# We expect the user to fix the document by doing the following:
+				# * open the document
+				# * select the offending text with the stress mark
+				# * note it says "Multiple Langauges" in status bar at the bottom of the window
+				# * select the correct language
+				# * save the document
 				for child in html_el:
-					if child.tag == "span" and child.text == u"\u0301":
-						raise OdfBadFormatting("Spurious stress mark span")
-						print("  Warning: spurious stress mark span")
+					if child.tag == "span":
+						if child.text == u"\u0301":
+							raise OdfBadFormatting("Spurious stress mark span")
+						if child.tail and child.tail.startswith(u"\u0301"):
+							raise OdfBadFormatting("Combining stress mark between spans")
 
 			# If this is a <p> tag, examine it now that its children (if any)
 			# have been converted. If it is completely empty, put a <BR> tag
@@ -939,7 +952,7 @@ class Odt2Html(object):
 
 		# Manifest is finished.
 		if self.opts.debug:
-			for line in json.dumps(manifest, indent=4, separators=(',',':'), ensure_ascii=False).split("\n"):
+			for line in json.dumps(manifest, indent=2, separators=(',',':'), ensure_ascii=False).split("\n"):
 				print("  %s" % line)
 
 		# Create the <A> element. It identifies the recording by playlist index number.
@@ -1082,7 +1095,7 @@ class Odt2Html(object):
 
 			script = E.script(
 				{'type':'text/javascript'},
-				"\nvar playlist=" + json.dumps(self.playlist, indent=2, separators=(',',':'), ensure_ascii=False) + ";\n"
+				"\nvar playlist=" + json.dumps(self.playlist, indent=1, separators=(',',':'), ensure_ascii=False) + ";\n"
 				)
 			script.tail = "\n"
 			self.html_head.append(script)
@@ -1090,7 +1103,7 @@ class Odt2Html(object):
 		# If there are "speaking table cells", insert the code for the player inline.
 		if self.require_bgplay:
 			script = E.script({'type':'text/javascript'},
-				"""\
+				"""
 				if(!window.analytics) window.analytics = function() {};
 				function bgplay(url) {
 					if(!bgplay.has_ogg)
@@ -1101,7 +1114,7 @@ class Odt2Html(object):
 				}
 				bgplay.player = new Audio();
 				bgplay.has_ogg = bgplay.player.canPlayType("audio/ogg; codecs=vorbis")
-				"""
+				""".replace("\n\t\t\t\t","\n")
 				)
 			script.tail = "\n"
 			self.html_head.append(script)
@@ -1134,10 +1147,15 @@ class Odt2Html(object):
 		# Style is responsive
 		self.html_head.append(E.meta({"name":"viewport","content":"width=device-width,initial-scale=1"}))
 
+		if self.opts.font_support_level >= 3 and self.styles.default_font_family is not None:
+			font_family = "'{font_family}',serif".format(font_family=self.styles.default_font_family)
+		else:
+			font_family = "serif"
+
 		# The base stylesheet for web browers
-		style = """\
+		self.add_css("""
 			HTML,BODY,H1,H2,H3,H4,H4,P,OL,UL,LI { margin:0; padding:0 }
-			BODY { font-family: serif; font-size:12pt }
+			BODY { font-family: {{FONT_FAMILY}}; font-size:12pt }
 			H1,H2,H3,H4,H4 { font-size: inherit }
 			UL,OL { list-style-position: outside }
 			LI,P { position: relative }
@@ -1155,17 +1173,15 @@ class Odt2Html(object):
 				BODY { position:relative; box-sizing:border-box; min-height:100%; margin:0 3%; padding:0.3in 0 0.4in }
 				DIV.footer { position:absolute; left:0; bottom:0.1in; margin:0; }
 				}
-			"""
+			""".replace("{{FONT_FAMILY}}",font_family))
 
 		# If we have any "speaking table cells", add extra style rules to put
 		# a blue border around each and give them a hover effect.
 		if self.require_bgplay:
-			style += """\
-				TD.bgplay, DIV.wrap > DIV.bgplay {border: 1px solid blue !important; cursor: pointer}
-				TD.bgplay:hover, DIV.wrap > DIV.bgplay:hover {background-color: #f0f0f0}
-				"""
-
-		self.add_css(style)
+			self.add_css("""
+			TD.bgplay, DIV.wrap > DIV.bgplay {border: 1px solid blue !important; cursor: pointer}
+			TD.bgplay:hover, DIV.wrap > DIV.bgplay:hover {background-color: #f0f0f0}
+			""")
 
 		# Add the styles from the ODT document (converted to CSS of course).
 		self.add_css("\n".join(self.styles.get_css(3.0)))
@@ -1317,7 +1333,7 @@ class Odt2Html(object):
 
 		if len(linked_data) > 0:
 			script = E.script({'type':'application/ld+json'})
-			script.text = "\n" + json.dumps(linked_data, indent=2, sort_keys=True) + "\n"
+			script.text = "\n" + json.dumps(linked_data, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 			script.tail = "\n"
 			self.html_head.append(script)
 
@@ -1400,6 +1416,9 @@ class Odt2Html(object):
 				print("  %s: no wrapping" % table.attrib['class'])
 
 	def minimize(self):
+		for el in self.html_head.xpath("//script"):
+			if el.attrib.get('type') == "text/javascript" and el.text is not None:
+				el.text = jsmin(el.text)
 		for el in self.html_head.xpath("//style"):
 			if el.attrib.get('type') == "text/css" and el.text is not None:
 				el.text = cssmin(el.text)
@@ -1655,7 +1674,9 @@ class Odt2Html(object):
 	# Insert CSS styles into the head of the document.
 	def add_css(self, css):
 		style = E.style({"type": "text/css"})
-		style.text = "\n" + re.sub(r"^\s*", r" ", css, flags=re.MULTILINE)
+		css = css.strip()
+		css = re.sub(r"^\t\t\t", "", css, flags=re.MULTILINE)
+		style.text = "\n" + css + "\n"
 		self.html_head.append(style)
 
 #============================================================================
@@ -1748,7 +1769,7 @@ class OdtStyle2Css(object):
 			if self.opts.font_support_level >= 2 and "font-family" in font_face.attrib:
 				value = font_face.attrib["font-family"]
 				font_families.append(value)
-			if "font-family-generic" in font_face.attrib:	
+			if "font-family-generic" in font_face.attrib:	# give the generic font name in any case
 				value = font_face.attrib["font-family-generic"]
 				value = self.font_family_map.get(value, None)
 				if value is not None:
@@ -2024,6 +2045,7 @@ class OdtStyle2Css(object):
 				for el in odt_style:
 					if el.tag == "text-properties":
 						self.default_language = el.attrib['language']
+						self.default_font_family = el.attrib['font-name']
 
 		# Partial implementation of List Styles
 		# FIXME: converting ODT style to a whole set of CSS styles is messy
@@ -2304,9 +2326,6 @@ class OdfBadFormatting(Exception):
 # Main
 #============================================================================
 if __name__ == "__main__":
-	#sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
-	#sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
-
 	verbose = False
 	force = False
 	output_directory = None
@@ -2332,6 +2351,8 @@ if __name__ == "__main__":
 			opts.nav_names = sys.argv[1][12:].split(",")
 		elif sys.argv[1].startswith("--index="):
 			opts.indexes.append(Odt2HtmlIndex(sys.argv[1][8:]))
+		elif sys.argv[1].startswith("--font-support-level="):
+			opts.font_support_level = int(sys.argv[1][21:])
 		elif sys.argv[1].startswith("--template="):
 			opts.template = sys.argv[1][11:]
 			assert os.path.isfile(opts.template)
@@ -2408,7 +2429,7 @@ if __name__ == "__main__":
 			# creation time of the ODT file from which it was made.
 			os.utime(output_filename, (filename_mtime + 0.01, filename_mtime + 0.01))
 		elif verbose:
-			print("    up-to-date")
+			print("  up-to-date")
 
 	print("Built %d and rebuilt %d of %d files." % (count_built, count_rebuilt, count_total))
 
