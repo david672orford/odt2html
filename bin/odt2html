@@ -1,8 +1,9 @@
 #! /usr/bin/python3
 # encoding=utf-8
+#
 # odt2html
 #
-# Copyright 2014--2021, Trinity College Computing Center
+# Copyright 2014--2024, Trinity College Computing Center
 # This file is part of Odt2html.
 #
 # Odt2html is free software: you can redistribute it and/or modify
@@ -54,12 +55,13 @@ import fnmatch
 import copy
 import codecs
 import json
+from copy import deepcopy
 from rcssmin import cssmin
 from rjsmin import jsmin
 from PIL import Image
 from base64 import b64encode
 
-import lxml.etree as ET	
+import lxml.etree as ET
 from lxml.builder import E
 import lxml.html
 
@@ -131,7 +133,7 @@ class Odt2HtmlOptions(object):
 
 #============================================================================
 # These two classes are used to load an HTML index pages which the user may
-# choose to provide. We load this index pages so that we can create 
+# choose to provide. We load this index pages so that we can create
 # backlinks in the converted documents. We also draw metadata from these
 # pages.
 #============================================================================
@@ -396,8 +398,8 @@ class Odt2Html(object):
 
  			# If this <td> contains a single paragraph, subsume it.
 			if len(td) == 1 and td[0].tag == "p" \
-				and not self.styles.test(td[0].attrib.get('class'), 'margin*') \
-				and not self.styles.test(td[0].attrib.get('class'), 'border'):
+				and not self.styles.test(td[0].attrib.get("class"), "margin*") \
+				and not self.styles.test(td[0].attrib.get("class"), "border"):
 				p = td[0]
 				classes = []
 				if "class" in td.attrib:
@@ -425,13 +427,31 @@ class Odt2Html(object):
 					parent.text = ""
 				parent.text += el.tail
 				el.tail = None
-			del el.attrib['hoist']
+			del el.attrib["hoist"]
+
+		# Hoist the note links out of the note container and move the note bodies
+		# to an unordered list at the end of the document.
+		notes = list(self.html_body.xpath(".//li[@class='note']"))
+		if len(notes) > 0:
+			notes_ul = E.ul({"class":"notes"})
+			for note in notes:
+				note_citation = note.xpath("./div[@class='note-citation']")[0]
+				note_body = note.xpath("./div[@class='note-body']")[0]
+				a = deepcopy(note_citation)
+				a.tag = "a"
+				a.attrib["href"] = "#" + note.attrib["id"]
+				a.tail = note.tail
+				note.tail = None
+				parent = note.getparent()
+				parent.insert(parent.index(note), a)
+				notes_ul.append(note)
+			self.html_body.append(notes_ul)
 
 	#------------------------------------------------------------------
 	# Load one of the XML files embedded in the ODT file
 	#------------------------------------------------------------------
 	def load_xml(self, filename):
-		if self.opts.debug:	
+		if self.opts.debug:
 			print("===== %s =====" % filename)
 
 		tree = ET.parse(self.odt.open(filename))
@@ -441,7 +461,6 @@ class Odt2Html(object):
 			if isinstance(el, ET._Comment):
 				continue
 			el.tag = el.tag.split("}")[1]
-			attrib = {}
 			for name, value in el.attrib.items():
 				short_name = name.split("}")[1]
 				del el.attrib[name]
@@ -467,8 +486,8 @@ class Odt2Html(object):
 
 	def get_section_id(self, odt_el):
 		self.section_count += 1
-		if 'name' in odt_el.attrib:
-			return odt_el.attrib['name'].replace(" ","_")
+		if "name" in odt_el.attrib:
+			return odt_el.attrib["name"].replace(" ","_")
 		else:
 			return "topsect%d" % self.section_count
 
@@ -482,7 +501,7 @@ class Odt2Html(object):
 			return None
 		if len(section_sources) != 1:
 			raise OdfInvalid("%d <section-source> elements" % len(section_sources))
-		href = section_sources[0].attrib['href']
+		href = section_sources[0].attrib["href"]
 		return self.href_to_html(href)
 
 	#------------------------------------------------------------------
@@ -491,13 +510,13 @@ class Odt2Html(object):
 
 	# This function converts an ODT element to HTML and adds it to the
 	# parent HTML element specified. It then calls itself on each child
-	# of the ODT element with the newly created HTML element as the 
+	# of the ODT element with the newly created HTML element as the
 	# target parent.
 	def convert_element(self, odt_el, html_parent_el, list_style_name):
 
 		convert_children = True					# call self recursively on children
 
-		style_name = odt_el.attrib.get('style-name')
+		style_name = odt_el.attrib.get("style-name")
 
 		if odt_el.tag == "sequence-decls":		# mystery
 			html_el = None
@@ -513,13 +532,13 @@ class Odt2Html(object):
 						raise OdfInvalid("Master document inconsistency")
 				html_el.attrib["id"] = section_id
 			else:
-				html_el.attrib["id"] = odt_el.attrib['name'].replace(" ","_")
+				html_el.attrib["id"] = odt_el.attrib["name"].replace(" ","_")
 		elif odt_el.tag == "section-source":	# handled during pass 1
 			html_el = None
 		elif odt_el.tag == "h":
 			if self.opts.debug:
 				print("Heading:", self.element_extract_text(odt_el), style_name)
-			level = int(odt_el.attrib['outline-level'])
+			level = int(odt_el.attrib["outline-level"])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
 
@@ -533,7 +552,7 @@ class Odt2Html(object):
 					h_id = "subh%d" % (len(self.h1s) + 1)
 				h_filename = "content%d.html" % self.section_count
 				h_text = self.element_extract_text(odt_el)
-				html_el.attrib['id'] = h_id
+				html_el.attrib["id"] = h_id
 				self.h1s.append((h_filename, h_id, h_text))
 		elif odt_el.tag == "bookmark":
 			html_el = E.span({"dropme":odt_el.tag})
@@ -658,11 +677,23 @@ class Odt2Html(object):
 			html_el = None
 		elif odt_el.tag == "control":
 			html_el = E.span(
-				{'style':'border: thin solid black;display:inline-block;width:100%%;max-width:%s;height:%s' % (
-					odt_el.attrib['width'],
-					odt_el.attrib['height']
+				{"style":"border: thin solid black;display:inline-block;width:100%%;max-width:%s;height:%s" % (
+					odt_el.attrib["width"],
+					odt_el.attrib["height"]
 					)}
 				)
+
+		# Turn footnotes into LI tags. We later move them to a UL at the end of
+		# the document leaving an A tag in the place of each.
+		# FIXME: Handling of footnote style is a hack
+		elif odt_el.tag.startswith("note"):
+			print(f"{odt_el.tag}: {odt_el.attrib}")
+			if odt_el.tag == "note":
+				html_el = E.li({"id": odt_el.attrib["id"], "class":"note"})
+			elif odt_el.tag == "note-citation":
+				html_el = E.div({"class":"note-citation"})
+			elif odt_el.tag == "note-body":
+				html_el = E.div({"class":"note-body"})
 
 		# Unimplemented ODF tag
 		else:
@@ -670,7 +701,7 @@ class Odt2Html(object):
 			#html_el = E.span()
 			raise OdfNotImplementedYet("unimplemented tag: %s" % odt_el.tag)
 
-		# If we converted the ODF element to an HTML element 
+		# If we converted the ODF element to an HTML element
 		# (rather than simply dropping it),
 		if html_el is not None:
 			if odt_el.text is not None:				# transfer text within tags
@@ -681,9 +712,9 @@ class Odt2Html(object):
 			if style_name is not None:
 				classname, language = self.styles.claim_style(style_name)
 				if classname is not None:
-					html_el.attrib['class'] = classname
+					html_el.attrib["class"] = classname
 				if language is not None:
-					html_el.attrib['lang'] = language
+					html_el.attrib["lang"] = language
 				if self.styles.get_break_before(style_name) == "page":
 					# This element should appear at the top of a new page.
 					if len(self.html_body) > 0 or len(html_parent_el) > 0:		# if not at top of first page,
@@ -774,14 +805,14 @@ class Odt2Html(object):
 
 				# If "clear: both" is set in the table's style, set it in the wrapper DIV too.
 				if self.styles._by_css_class(html_el.attrib['class']).properties.get('clear') == 'both':
-					restraint.attrib['style'] = 'clear: both'	
+					restraint.attrib['style'] = 'clear: both'
 
 				html_el = restraint
 
-			# There are some empty ODF tags which we want to ignore, but we 
+			# There are some empty ODF tags which we want to ignore, but we
 			# cannot ignore them completely because they can come inside runs
 			# of text and we do not want to lose their tail text. Here we
-			# merge their text and tail text into either the parent element or the 
+			# merge their text and tail text into either the parent element or the
 			# previous sibling element and then drop them.
 			if "dropme" in html_el.attrib:
 				if len(html_el) > 0:
@@ -947,33 +978,33 @@ class Odt2Html(object):
 		# the "X" part so that the player can move a hightlighter through
 		# the text as the recording plays.
 		link_name = odt_el.attrib.get("name")
-		if link_name and link_name.startswith('Play'):
-			manifest['player_id'] = link_name[4:]	
+		if link_name and link_name.startswith("Play"):
+			manifest["player_id"] = link_name[4:]
 
 		# Manifest is finished.
 		if self.opts.debug:
-			for line in json.dumps(manifest, indent=2, separators=(',',':'), ensure_ascii=False).split("\n"):
+			for line in json.dumps(manifest, indent=2, separators=(",",":"), ensure_ascii=False).split("\n"):
 				print("  %s" % line)
 
 		# Create the <A> element. It identifies the recording by playlist index number.
 		# As soon as we have done that we add the recording to the playlist.
 		# Order is important here!
 		html_el = E.a({
-			'class':'play_link',
-			'href':'javascript:play(%d)' % len(self.playlist)
+			"class":"play_link",
+			"href":"javascript:play(%d)" % len(self.playlist)
 			})
-		if 'title' in manifest:
-			html_el.attrib['title'] = manifest['title']
+		if "title" in manifest:
+			html_el.attrib["title"] = manifest["title"]
 		self.playlist.append(manifest)
 
 		return html_el
 
 	# File types supported by our embedded player
 	playable_file_extensions = {
-		'.mp3': ('audio', 'audio/mpeg'),
-		'.ogg': ('audio', 'audio/ogg'),
-		'.mp4': ('video', 'video/mp4'),
-		'.webm': ('video', 'video/webm')
+		".mp3": ("audio", "audio/mpeg"),
+		".ogg": ("audio", "audio/ogg"),
+		".mp4": ("video", "video/mp4"),
+		".webm": ("video", "video/webm")
 		}
 
 	def filetype_from_filename(self, filename):
@@ -996,7 +1027,7 @@ class Odt2Html(object):
 	# Marks alphabetical index entry
 	def convert_index_mark(self, odt_el):
 		assert odt_el.text is None
-		term = odt_el.attrib.get('string-value')
+		term = odt_el.attrib.get("string-value")
 		if term is None:
 			term = ""
 			if odt_el.tail is not None:
@@ -1010,7 +1041,7 @@ class Odt2Html(object):
 			if value is not None:
 				values.append(value)
 		html_el = E.span({'id':"idx%02d" % self.topic_index_counter, 'data-index':json.dumps(values,separators=(',', ':'))})
-		self.topic_index_counter += 1	
+		self.topic_index_counter += 1
 		html_el.text = odt_el.tail
 		odt_el.tail = None				# so it will not be copied to html_el.tail
 		return html_el
@@ -1034,17 +1065,17 @@ class Odt2Html(object):
 
 		# an actual frame
 		else:
-			name = odt_frame.attrib['name']
+			name = odt_frame.attrib["name"]
 			if name in self.opts.nav_names:
 				html_el = E.nav()
 			else:
 				html_el = E.div()
-			html_el.attrib['id'] = name
+			html_el.attrib["id"] = name
 
 			# Frames anchored to paragraphs must be hoisted out of them if we
 			# are to produce valid HTML.
 			if odt_frame.attrib.get("anchor-type") == "paragraph":
-				html_el.attrib['hoist'] = 'true'
+				html_el.attrib["hoist"] = "true"
 
 		# Convert the frame's style attributes
 		style = []
@@ -1052,10 +1083,10 @@ class Odt2Html(object):
 			if attrib in odt_frame.attrib:
 				style.append("%s:%s" % (attrib, odt_frame.attrib[attrib]))
 
-		if 'x' in odt_frame.attrib:
-			style.append('margin-left:%s' % odt_frame.attrib['x'])
+		if "x" in odt_frame.attrib:
+			style.append("margin-left:%s" % odt_frame.attrib["x"])
 
-		html_el.attrib['style'] = ";".join(style)
+		html_el.attrib["style"] = ";".join(style)
 
 		return html_el
 
@@ -1090,11 +1121,11 @@ class Odt2Html(object):
 			# Player IDs connect players with sections of text with a moving highlight.
 			# Delete presumed player IDs which do not match such a section.
 			for item in self.playlist:
-				if 'player_id' in item and not self.html_body.xpath(".//div[@id='Text%s']" % item['player_id']):
-					del item['player_id']
+				if "player_id" in item and not self.html_body.xpath(".//div[@id='Text%s']" % item["player_id"]):
+					del item["player_id"]
 
 			script = E.script(
-				{'type':'text/javascript'},
+				{"type":"text/javascript"},
 				"\nvar playlist=" + json.dumps(self.playlist, indent=1, separators=(',',':'), ensure_ascii=False) + ";\n"
 				)
 			script.tail = "\n"
@@ -1102,7 +1133,7 @@ class Odt2Html(object):
 
 		# If there are "speaking table cells", insert the code for the player inline.
 		if self.require_bgplay:
-			script = E.script({'type':'text/javascript'},
+			script = E.script({"type":"text/javascript"},
 				"""
 				if(!window.analytics) window.analytics = function() {};
 				function bgplay(url) {
@@ -1123,9 +1154,9 @@ class Odt2Html(object):
 		# player, load the popup player.
 		if len(self.playlist):
 			script = E.script({
-				'type':'text/javascript',
-				'src':'%s/player%s.js' % (self.opts.player_lib_dir, self.opts.player_version),
-				'defer':'defer'
+				"type":"text/javascript",
+				"src":"%s/player%s.js" % (self.opts.player_lib_dir, self.opts.player_version),
+				"defer":"defer"
 				})
 			script.tail = "\n"
 			self.html_head.append(script)
@@ -1167,6 +1198,11 @@ class Odt2Html(object):
 			HR.pagebreak { margin: 0.5in }
 			SPAN.space { white-space: pre-wrap }
 			DIV.footer { margin-top: 0.2in; font-size: 8pt; white-space: nowrap; max-width: 100%; overflow: hidden }
+			A.note-citation { font-size: .85em; vertical-align: super }
+			UL.notes { list-style-type: none }
+			UL.notes LI { display: flex; margin: .2em 0 }
+			DIV.note-citation { width: 2rem; flex-shrink: 0 }
+			DIV.note-body > * { text-indent: 0; margin-left: 0 } !important
 			@media print { @page { margin: 0.5in } }
 			@media screen {		/* push down footer */
 				HTML { height:100% }
@@ -1293,7 +1329,7 @@ class Odt2Html(object):
 				"author": index.author,
 				"datePublished": self.metadata['Publication date'],
 				"dateModified": self.metadata['Revision date']
-				}	
+				}
 			if 'description' in self.metadata:
 				article['description'] = self.metadata['description']
 			linked_data.append(article)
@@ -1522,9 +1558,9 @@ class Odt2Html(object):
 			else:
 				chunk = self.html_body
 				remaining = []
-		
+
 			content_id = "content%d" % i
-			content_filename = "content%d.html" % i	
+			content_filename = "content%d.html" % i
 
 			# Add this part to <manifest> element of content.opf so
 			# that the ereader will know it is part of the ebook.
@@ -1650,7 +1686,7 @@ class Odt2Html(object):
 	# Is this element empty of text and children?
 	def element_empty(self, el):
 		return el.text is None and el.tail is None and len(list(el)) == 0
-	
+
 	# Extract text from an ODT element and its children.
 	# Throw away any formatting.
 	def element_extract_text(self, el):
@@ -1662,7 +1698,7 @@ class Odt2Html(object):
 		if el.tail is not None:
 			text += el.tail
 		return text
-						
+
 	# Convert an href to the proper format for the web version.
 	def href_to_html(self, href):
 		href = re.sub(r'\.odt$', '.html', href, flags=re.IGNORECASE)		# change extension
@@ -2017,14 +2053,14 @@ class OdtStyle2Css(object):
 
 			# Add to list of all styles.
 			self.styles_ordered.append(css_style)
-	
+
 			# For handling parent-style-name attribute
 			self.styles_byselector[(css_style.template, css_style.name)] = css_style
-	
+
 			# If this style actually will appear in the CSS stylesheet,
 			if not css_style.simplified_td:
 				self.styles_byname[css_style.name] = css_style
-	
+
 			# If this style has the same right-hand-side as a style defined earlier,
 			# note that that that earlier style could be used as a substitute to save
 			# space in the HTML output file.
@@ -2077,7 +2113,7 @@ class OdtStyle2Css(object):
 						break
 				else:
 					OdfInvalid("list-style %s has not list-level-properties" % css_style.name)
-				
+
 			self.styles_ordered.append(css_style)
 			self.styles_byname[css_style.name] = css_style
 
@@ -2100,7 +2136,7 @@ class OdtStyle2Css(object):
 		return len(fnmatch.filter(style.properties.keys(), pattern))
 
 	# The HTML generator calls this when it adds an element which uses a styles.
-	# If the style exists, a note is made to include it in the CSS and the 
+	# If the style exists, a note is made to include it in the CSS and the
 	# HTML class to use is returned. Otherwise, None is returned.
 	def claim_style(self, style_name):
 		if not style_name in self.styles_byname:
@@ -2153,7 +2189,7 @@ class OdtStyle2Css(object):
 					word = "thin"
 			words.append(word)
 		return " ".join(words)
-	
+
 	# Convert a CSS-style dimension with units into points.
 	# We use this when making comparisons.
 	def dimension2points(self, dimension):
@@ -2393,7 +2429,7 @@ if __name__ == "__main__":
 		if not os.path.exists(output_filename):
 			if verbose:
 				print("  building...")
-			count_built += 1 
+			count_built += 1
 			build = True
 		elif force or os.path.getmtime(output_filename) < filename_mtime:
 			if verbose:
