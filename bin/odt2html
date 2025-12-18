@@ -82,13 +82,13 @@ from urllib.request import url2pathname
 class Odt2HtmlOptions(object):
 	debug = False						# --debug
 	output_format = "html"
-	minimize = True						# minimize CSS
+	minimize = True						# minimize CSS and Javascript
 	template = None						# --template=
 	site_name = None					# --site-name=
 	site_url = None						# --site-url=
 	nav_names = []						# --nav-names=
 	indexes = []						# --index=
-	player_lib_dir = '../lib/odt2html'	# --player-lib-dir=
+	player_lib_dir = "../lib/odt2html"	# --player-lib-dir=
 	player_version = "-v14.min"
 	zoom_image_version = "-v1"
 
@@ -170,7 +170,7 @@ class Odt2HtmlIndex(dict):
 
 		# Collect information about the index entry for each listed document.
 		for section in index.xpath("//section"):
-			section_id = section.attrib.get('id')
+			section_id = section.attrib.get("id")
 			h2s = section.xpath("./h2")
 
 			if len(h2s) == 1:
@@ -179,7 +179,7 @@ class Odt2HtmlIndex(dict):
 				section_heading = None
 
 			for anchor in section.xpath(".//a"):
-				href = anchor.attrib.get('href')
+				href = anchor.attrib.get("href")
 				if href:
 					filename = unquote(href)
 					self[filename] = Odt2HtmlIndexedArticle(self, section_id, section_heading, anchor.text_content().strip())
@@ -190,22 +190,22 @@ class Odt2HtmlIndex(dict):
 			for item in data if type(data) is list else (data,):
 
 				# Save author and publisher so that we can copy it into the Article metadata.
-				if item['@type'] == "Organization":
+				if item["@type"] == "Organization":
 					self.publisher = {
-						'@type':item['@type'],
-						'name':item['name'],
-						'logo':item['logo']
+						"@type":item["@type"],
+						"name":item["name"],
+						"logo":item["logo"]
 						}
 					self.author = {
-						'@type':item['@type'],
-						'name':item['name'],
+						"@type":item["@type"],
+						"name":item["name"],
 						}
 					continue
 
 				# FIXME: This is currently unused. Can it replace --site-url= and --site-name=?
-				if item['@type'] == "WebSite":
-					self.site_name = item['name']
-					self.site_url = item['url']
+				if item["@type"] == "WebSite":
+					self.site_name = item["name"]
+					self.site_url = item["url"]
 					if not self.site_url.endswith("/"):
 						self.site_url += "/"
 					continue
@@ -213,8 +213,8 @@ class Odt2HtmlIndex(dict):
 				# Unless an index page is the top page of the site it should have breadcrumbs
 				# to show where it is in the site. Save them so that we can propagate them
 				# to the indexed document.
-				if item['@type'] == "BreadcrumbList":
-					self.breadcrumblist = item['itemListElement']
+				if item["@type"] == "BreadcrumbList":
+					self.breadcrumblist = item["itemListElement"]
 
 		if self.site_name is None and len(self.breadcrumblist) == 0:
 			print("Warning: index \"%s\" lacks Schema.org metadata" % self.filename)
@@ -687,13 +687,15 @@ class Odt2Html(object):
 		# the document leaving an A tag in the place of each.
 		# FIXME: Handling of footnote style is a hack
 		elif odt_el.tag.startswith("note"):
-			print(f"{odt_el.tag}: {odt_el.attrib}")
+			#print(f"{odt_el.tag}: {odt_el.attrib}")
 			if odt_el.tag == "note":
 				html_el = E.li({"id": odt_el.attrib["id"], "class":"note"})
 			elif odt_el.tag == "note-citation":
 				html_el = E.div({"class":"note-citation"})
 			elif odt_el.tag == "note-body":
 				html_el = E.div({"class":"note-body"})
+			else:
+				raise OdfNotImplementedYet("unimplemented note tag: %s" % odt_el.tag)
 
 		# Unimplemented ODF tag
 		else:
@@ -1453,10 +1455,10 @@ class Odt2Html(object):
 
 	def minimize(self):
 		for el in self.html_head.xpath("//script"):
-			if el.attrib.get('type') == "text/javascript" and el.text is not None:
+			if el.attrib.get("type") == "text/javascript" and el.text is not None:
 				el.text = jsmin(el.text)
 		for el in self.html_head.xpath("//style"):
-			if el.attrib.get('type') == "text/css" and el.text is not None:
+			if el.attrib.get("type") == "text/css" and el.text is not None:
 				el.text = cssmin(el.text)
 
 	#------------------------------------------------------------------
@@ -1513,7 +1515,7 @@ class Odt2Html(object):
 		# Metadata about the book
 		metadata = E.metadata()
 		index_tpl.append(metadata)
-		metadata.append(E("{http://purl.org/dc/elements/1.1/}title",self.metadata['title']))
+		metadata.append(E("{http://purl.org/dc/elements/1.1/}title",self.metadata["title"]))
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}identifier",epub_uuid,{"id":"bookid"}))
 		metadata.append(E("{http://purl.org/dc/elements/1.1/}language","en-US"))
 
@@ -1790,7 +1792,7 @@ class OdtStyle2Css(object):
 	def __init__(self, opts):
 		self.opts = opts
 
-		self.dimensions_re = re.compile("(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
+		self.dimensions_re = re.compile(r"(^[-0-9\.]+)((in)|(pt)|(mm)|(cm)|(px))$")
 		self.fonts = {}
 		self.styles_ordered = []		# preserves original order (really necessary?)
 		self.styles_byselector = {}		# by tag and class (for inclusion of parent styles)
@@ -1955,7 +1957,7 @@ class OdtStyle2Css(object):
 							css_style.properties["color"] = color
 
 					if "text-position" in el.attrib:
-						m = re.match("^((super)|(sub)|(\d+%))( (\d+%))?$", el.attrib["text-position"])
+						m = re.match(r"^((super)|(sub)|(\d+%))( (\d+%))?$", el.attrib["text-position"])
 						if not m:
 							raise OdfNotImplemented("unrecognized text position: %s" % el.attrib["text-position"])
 						else:
@@ -1993,42 +1995,44 @@ class OdtStyle2Css(object):
 					if "align" in el.attrib:
 						align = el.attrib["align"]
 						if align == "right":
-							css_style.properties['margin-left'] = 'auto'
+							css_style.properties["margin-left"] = "auto"
 						elif align == "center":
-							css_style.properties['margin-left'] = 'auto'
-							css_style.properties['margin-right'] = 'auto'
+							css_style.properties["margin-left"] = "auto"
+							css_style.properties["margin-right"] = "auto"
 
 				elif el.tag == "table-column-properties":
 					if "column-width" in el.attrib:
-						css_style.properties["width"] = el.attrib['column-width']
+						css_style.properties["width"] = el.attrib["column-width"]
 
 				elif el.tag == "table-row-properties":
 					if "min-row-height" in el.attrib:
-						css_style.properties["height"] = el.attrib['min-row-height']
+						css_style.properties["height"] = el.attrib["min-row-height"]
 
 				if el.tag == "table-cell-properties":
-					vertical_align = el.attrib.get('vertical-align','top')
+					vertical_align = el.attrib.get("vertical-align","top")
 					if vertical_align == "middle" or vertical_align == "bottom":
-						css_style.properties['vertical-align'] = vertical_align
+						css_style.properties["vertical-align"] = vertical_align
 
 				if el.tag == "graphic-properties":
-					if el.attrib.get('vertical-rel') == 'baseline':
+					if el.attrib.get("vertical-rel") == "baseline":
 						pass
 					else:
-						horizontal_pos = el.attrib.get('horizontal-pos')
-						if horizontal_pos in ('left', 'right'):
-							css_style.properties['float'] = horizontal_pos
-						elif horizontal_pos == 'from-left':
-							css_style.properties['float'] = 'left'
-						elif horizontal_pos == 'center':
-							css_style.properties['display'] = 'block'
-							css_style.properties['margin-left'] = 'auto'
-							css_style.properties['margin-right'] = 'auto'
+						horizontal_pos = el.attrib.get("horizontal-pos")
+						if horizontal_pos in ("left", "right"):
+							css_style.properties["float"] = horizontal_pos
+						elif horizontal_pos == "from-left":
+							css_style.properties["float"] = "left"
+						elif horizontal_pos == "center":
+							css_style.properties["display"] = "block"
+							css_style.properties["margin-left"] = "auto"
+							css_style.properties["margin-right"] = "auto"
+					if el.attrib.get("mirror") == "horizontal":
+						css_style.properties["transform"] = "scaleX(-1)"
 					# Without this, links will get tangled with the links of the parallel paragraph.
 					# Why does not seem to be well-understood.
-					if 'float' in css_style.properties:
-						css_style.properties['position'] = 'relative'
-						css_style.properties['z-index'] = '1'
+					if "float" in css_style.properties:
+						css_style.properties["position"] = "relative"
+						css_style.properties["z-index"] = "1"
 
 			# FIXME: read up on this. Does this attribute really indicate a new page?
 			# NOTE: this will override the break-before in <paragraph-properties>
@@ -2135,9 +2139,9 @@ class OdtStyle2Css(object):
 			return False
 		return len(fnmatch.filter(style.properties.keys(), pattern))
 
-	# The HTML generator calls this when it adds an element which uses a styles.
-	# If the style exists, a note is made to include it in the CSS and the
-	# HTML class to use is returned. Otherwise, None is returned.
+	# The HTML generator calls this when it adds an element which uses a style.
+	# If the style exists, a note is made to translate it into CSS and the
+	# HTML class name to use is returned. Otherwise, None is returned.
 	def claim_style(self, style_name):
 		if not style_name in self.styles_byname:
 			if not style_name.startswith("M"):
@@ -2374,6 +2378,8 @@ if __name__ == "__main__":
 			verbose = True
 		elif sys.argv[1] == "--force":
 			force = True
+		elif sys.argv[1] == "--collapse-styles":
+			opts.collapse_styles = True
 		elif sys.argv[1] == "--epub":
 			opts.output_format = "epub"
 		elif sys.argv[1].startswith("--site-name="):
