@@ -342,10 +342,10 @@ class Odt2Html(object):
 		else:
 			headings = content_xml.xpath("/document-content/body/text//h")
 			if len(headings) > 0:
-				self.metadata['title'] = self.element_extract_text(headings[0])
+				self.metadata["title"] = self.element_extract_text(headings[0])
 		if not 'title' in self.metadata:
 			raise OdfNotSupported("No document title")
-		self.title_el = E.title(self.metadata['title'])
+		self.title_el = E.title(self.metadata["title"])
 		self.html_head.append(self.title_el)
 
 		# Search for the description of the document
@@ -429,21 +429,34 @@ class Odt2Html(object):
 				el.tail = None
 			del el.attrib["hoist"]
 
-		# Hoist the note links out of the note container and move the note bodies
-		# to an unordered list at the end of the document.
+		# Find the endnotes (currently <li> tags) and move them to the end
 		notes = list(self.html_body.xpath(".//li[@class='note']"))
 		if len(notes) > 0:
 			notes_ul = E.ul({"class":"notes"})
 			for note in notes:
 				note_citation = note.xpath("./div[@class='note-citation']")[0]
-				note_body = note.xpath("./div[@class='note-body']")[0]
+
+				# Create an <a> tag linked to the endnote
 				a = deepcopy(note_citation)
 				a.tag = "a"
+				a.attrib["id"] = "lnk-" + note.attrib["id"]
 				a.attrib["href"] = "#" + note.attrib["id"]
+
+				# Replace the endnote with the <a> tag
 				a.tail = note.tail
 				note.tail = None
 				parent = note.getparent()
 				parent.insert(parent.index(note), a)
+
+				# Move the text of the note-citation into an <a> tag
+				backlink = E.a({
+					"href": "#lnk-" + note.attrib["id"],
+					})
+				backlink.text = note_citation.text
+				note_citation.text = None
+				note_citation.append(backlink)
+
+				# Move the endnote to the endnotes container
 				notes_ul.append(note)
 			self.html_body.append(notes_ul)
 
@@ -555,7 +568,10 @@ class Odt2Html(object):
 				html_el.attrib["id"] = h_id
 				self.h1s.append((h_filename, h_id, h_text))
 		elif odt_el.tag == "bookmark":
-			html_el = E.span({"dropme":odt_el.tag})
+			html_el = E.span({
+				"id": odt_el.attrib["name"],
+				"class": "bookmark",
+				})
 		elif odt_el.tag == "bookmark-start":
 			html_el = E.span({"dropme":odt_el.tag})
 		elif odt_el.tag == "bookmark-end":
@@ -664,12 +680,12 @@ class Odt2Html(object):
 			html_el = E.div()
 
 		elif odt_el.tag == "user-defined":
-			html_el = E.span({"class":"user-defined"})		# class is not used
+			html_el = E.span({"class":"user-defined"})	# class is not used
 		elif odt_el.tag == "variable-decls":
 			html_el = None	# drop children too
 		elif odt_el.tag == "variable-set":
 			html_el = E.span({"dropme":odt_el.tag})
-		elif odt_el.tag == "annotation":		# user note
+		elif odt_el.tag == "annotation":				# user note
 			html_el = None
 
 		# Forms not really implemented. All we do is draw a box for each control.
@@ -696,6 +712,9 @@ class Odt2Html(object):
 				html_el = E.div({"class":"note-body"})
 			else:
 				raise OdfNotImplementedYet("unimplemented note tag: %s" % odt_el.tag)
+
+		elif odt_el.tag == "date":
+			html_el = E.span()
 
 		# Unimplemented ODF tag
 		else:
@@ -794,20 +813,17 @@ class Odt2Html(object):
 
 				# Wrap the <table> in a <div> since this seems the only way we can
 				# restrict its width on all browsers.
-				restraint = E.div(html_el, {'class':'restrain'})
+				restraint = E.div(html_el, {"class":"restrain"})
 
-				# If the previous element is <h*>, then wrap it and the wrapper <div>
-				# in still another wrapper <div> so that 'clear: both' will push them
-				# both down.
-				if len(html_parent_el) >= 1:
-					sibling = html_parent_el[-1]
-					if sibling.tag.startswith("h"):			# FIXME: use regexp
-						html_parent_el.remove(sibling)
-						restraint = E.div(sibling, restraint)
-
-				# If "clear: both" is set in the table's style, set it in the wrapper DIV too.
-				if self.styles._by_css_class(html_el.attrib['class']).properties.get('clear') == 'both':
-					restraint.attrib['style'] = 'clear: both'
+				# If "clear: both" is set in the table's style, copy it into the style
+				# of the wrapper. If the previous element is a heading, copy it into
+				# the headings style as well.
+				if self.styles._by_css_class(html_el.attrib["class"]).properties.get("clear") == "both":
+					restraint.attrib["style"] = "clear: both"
+					if len(html_parent_el) >= 1:
+						prev_el = html_parent_el[-1]
+						if prev_el.tag in ("h1","h2","h3","h4","h5","h6"):
+							prev_el.attrib["style"] = "clear: both"
 
 				html_el = restraint
 
@@ -840,7 +856,7 @@ class Odt2Html(object):
 			elif html_el != html_parent_el:
 				html_parent_el.append(html_el)
 				# Table columns and cells can be repeated
-				for i in range(int(odt_el.attrib.get('number-columns-repeated', 1)) - 1):
+				for i in range(int(odt_el.attrib.get("number-columns-repeated", 1)) - 1):
 					html_parent_el.append(copy.deepcopy(html_el))
 
 		return
@@ -855,11 +871,7 @@ class Odt2Html(object):
 			html_el = self.convert_player(odt_el, href)
 		else:
 			#print("  href: %s" % href)
-			if href.startswith("http:"):				# Internet link
-				pass
-			elif href.startswith("https:"):				# Internet link
-				pass
-			elif href.startswith("ftp:"):				# Internet link
+			if href.split(":")[0] in ("http", "https", "ftp", "mailto"):	# Internet link
 				pass
 			elif href.startswith("../"):				# Intrasite link relative to zip root (but outside)
 				href_html = self.href_to_html(href)		# convert extension
@@ -931,14 +943,14 @@ class Odt2Html(object):
 					print("  Play a single local file")
 				mediatype, mimetype = self.filetype_from_filename(filename)
 				manifest = {
-					'basedir': quote(os.path.dirname(filename)),
-					'title': self.element_extract_text(odt_el),
+					"basedir": quote(os.path.dirname(filename)),
+					"title": self.element_extract_text(odt_el),
 					mediatype: [
 						{
-						'mimetype': mimetype,
-						'src': quote(os.path.basename(filename)),
-						'filesize': os.path.getsize(path_from_cwd),
-						'aspect_ratio': '4:3'
+						"mimetype": mimetype,
+						"src": quote(os.path.basename(filename)),
+						"filesize": os.path.getsize(path_from_cwd),
+						"aspect_ratio": "4:3"
 						}]
 					}
 
@@ -948,12 +960,12 @@ class Odt2Html(object):
 				print("  Play a video on Youtube")
 
 			# Extract Youtube video ID from the URL
-			m = re.search(r'v=(.+)$', href)
+			m = re.search(r"v=(.+)$", href)
 			if not m:
 				raise OdfBadPlayer("Failed to parse Youtube link")
 
 			manifest = {
-				'title': self.element_extract_text(odt_el),
+				"title": self.element_extract_text(odt_el),
 				'youtube': m.group(1)
 				}
 
@@ -1056,7 +1068,7 @@ class Odt2Html(object):
 		# A container for an image
 		odt_images = odt_frame.xpath("./image")
 		if len(odt_images) > 0:
-			href = odt_images[0].attrib['href']
+			href = odt_images[0].attrib["href"]
 			html_el = E.img({"src": self.add_image(href)})
 			titles = odt_frame.xpath("./title")
 			if len(titles) > 0:
@@ -1081,9 +1093,12 @@ class Odt2Html(object):
 
 		# Convert the frame's style attributes
 		style = []
-		for attrib in ("width", "height", "min-width", "min-height", "max-width", "max-height"):
-			if attrib in odt_frame.attrib:
-				style.append("%s:%s" % (attrib, odt_frame.attrib[attrib]))
+		if "rel-width" in odt_frame.attrib:
+			style.append("width:%s" % odt_frame.attrib["rel-width"])
+		else:
+			for attrib in ("width", "height", "min-width", "min-height", "max-width", "max-height"):
+				if attrib in odt_frame.attrib:
+					style.append("%s:%s" % (attrib, odt_frame.attrib[attrib]))
 
 		if "x" in odt_frame.attrib:
 			style.append("margin-left:%s" % odt_frame.attrib["x"])
@@ -1200,10 +1215,11 @@ class Odt2Html(object):
 			HR.pagebreak { margin: 0.5in }
 			SPAN.space { white-space: pre-wrap }
 			DIV.footer { margin-top: 0.2in; font-size: 8pt; white-space: nowrap; max-width: 100%; overflow: hidden }
-			A.note-citation { font-size: .85em; vertical-align: super }
-			UL.notes { list-style-type: none }
+			A.note-citation { font-size: 65%; vertical-align: super; line-height: 0 }
+			UL.notes { list-style-type: none; overflow-y: scroll }
 			UL.notes LI { display: flex; margin: .2em 0 }
-			DIV.note-citation { width: 2rem; flex-shrink: 0 }
+			DIV.note-citation { flex-shrink: 0 }
+			DIV.note-citation A { font-size: 10pt; text-decoration: none; display: block; width: 2rem; }
 			DIV.note-body > * { text-indent: 0; margin-left: 0 } !important
 			@media print { @page { margin: 0.5in } }
 			@media screen {		/* push down footer */
@@ -1310,13 +1326,13 @@ class Odt2Html(object):
 	def add_schema_org(self, site_url, page_url):
 		linked_data = []
 
-		if 'og:image' in self.metadata:
+		if "og:image" in self.metadata:
 			assert len(self.opts.indexes) > 0
 			index = self.opts.indexes[0]
-			assert self.metadata['og:image'].endswith(".png")
-			assert os.path.isfile(self.metadata['og:image'])
-			assert 'title' in self.metadata
-			assert 'Publication date' in self.metadata
+			assert self.metadata["og:image"].endswith(".png")
+			assert os.path.isfile(self.metadata["og:image"])
+			assert "title" in self.metadata
+			assert "Publication date" in self.metadata
 			assert index.publisher
 			assert index.author
 			article = {
@@ -1370,7 +1386,7 @@ class Odt2Html(object):
 				})
 
 		if len(linked_data) > 0:
-			script = E.script({'type':'application/ld+json'})
+			script = E.script({"type":"application/ld+json"})
 			script.text = "\n" + json.dumps(linked_data, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 			script.tail = "\n"
 			self.html_head.append(script)
@@ -1395,8 +1411,8 @@ class Odt2Html(object):
 						url = td_sound_finder.find(text)
 						if url:
 							self.require_bgplay = True
-							td.attrib['onclick'] = 'bgplay("%s")' % url
-							td.attrib['class'] = td.attrib.get('class','') + " bgplay"
+							td.attrib["onclick"] = 'bgplay("%s")' % url
+							td.attrib["class"] = td.attrib.get("class","") + " bgplay"
 						if self.opts.debug:
 							print(u"  %s TD: %s %s" % (td_sound_lang, text, "OK" if url else "Missing"))
 						break
@@ -1415,9 +1431,9 @@ class Odt2Html(object):
 		if self.opts.debug:
 			print("Fixing up wrappable tables...")
 		for table in self.html_body.xpath(".//table"):
-			if "Wrap" in table.attrib['class']:
+			if "Wrap" in table.attrib["class"]:
 				if self.opts.debug:
-					print("  %s: wrapping" % table.attrib['class'])
+					print("  %s: wrapping" % table.attrib["class"])
 				table.tag = "div"
 				table.attrib['class'] += " wrap"
 				table_css_style = self.styles._by_css_class(table.attrib['class'])
@@ -1695,6 +1711,8 @@ class Odt2Html(object):
 		text = ""
 		if el.text is not None:
 			text += el.text
+		else:
+			text += " "
 		for child_el in el:
 			text += self.element_extract_text(child_el)
 		if el.tail is not None:
@@ -1899,7 +1917,7 @@ class OdtStyle2Css(object):
 					if prop in el.attrib:					# If this attribute is defined,
 						value = el.attrib[prop]
 						if value != "100%":					# don't know what 100% is supposed to mean, but it is poison...
-							css_style.properties[prop] = self.clean_dimensions(value)
+							css_style.properties[prop] = self.clean_dimensions(prop, value)
 
 				if el.tag == "section-properties":
 					for el2 in el:
@@ -1982,9 +2000,9 @@ class OdtStyle2Css(object):
 
 				elif el.tag == "table-properties":
 					width = el.attrib.get("width")
-					# If the table is width is "auto" or has an explicit width wide enough
-					# to reach the likely margins, assume the intent was to make it 100% wide.
-					if self.dimension2points(width) > (7.0 * 72.0):
+					# If the table has a width wide enough to reach the likely margins,
+					# assume the intent was to make it 100% wide.
+					if self.dimension2points(width) > (6.5 * 72.0):
 						css_style.properties["width"] = "100%"
 						css_style.properties["clear"] = "both"
 					# Otherwise, use the requested width, but make it the maxiumum
@@ -2020,8 +2038,10 @@ class OdtStyle2Css(object):
 						horizontal_pos = el.attrib.get("horizontal-pos")
 						if horizontal_pos in ("left", "right"):
 							css_style.properties["float"] = horizontal_pos
+							css_style.properties["clear"] = horizontal_pos
 						elif horizontal_pos == "from-left":
 							css_style.properties["float"] = "left"
+							css_style.properties["clear"] = "left"
 						elif horizontal_pos == "center":
 							css_style.properties["display"] = "block"
 							css_style.properties["margin-left"] = "auto"
@@ -2047,7 +2067,7 @@ class OdtStyle2Css(object):
 						del css_style.properties[name]
 						if value != "none":
 							css_style.properties["border"] = value
-				if not 'vertical-align' in css_style.properties:
+				if not "vertical-align" in css_style.properties:
 					css_style.template = "TABLE.%s TD"
 					css_style.simplified_td = True
 					css_style.name = css_style.name.split(".")[0]	# drop the cell part of the name
@@ -2180,12 +2200,12 @@ class OdtStyle2Css(object):
 	# Parse the right-hand side of a CSS style setting, find the numeric
 	# dimensions and enforce a minimum size. In the process, all units
 	# get converted to points.
-	def clean_dimensions(self, style_arg):
+	def clean_dimensions(self, prop_name, prop_value):
 		words = []
-		for word in style_arg.split(" "):
+		for word in prop_value.split(" "):
 			if self.dimensions_re.match(word):
 				points = self.dimension2points(word)
-				if points >= 0.8:
+				if points >= 0.8 or not prop_name.startswith("border"):
 					word = "%.2fpt" % points
 				elif points < 0.0001:
 					word = "0pt"

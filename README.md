@@ -66,7 +66,7 @@ ensure your document looks good both when printed and on the web.
   in the metadata (go to File-&gt;Properties and look under the Description
   tab). If the title there is blank, it will look for level 1 headings
   and take the first one as the title. If there are no level 1 headings,
-  the program will stop.
+  the program will abort the conversion.
 
 * Tabs for formatting tabular data are not supported in HTML. This
   converter will insert a few spaces for each tab, but unless the tabs
@@ -78,8 +78,7 @@ ensure your document looks good both when printed and on the web.
   probably not produce the result you intended when the ODF file is
   converted to HTML. Even if it does, it will break when the window size is
   adjusted. Instead insert an explicit line break (shift-enter in
-  Openoffice) or use non-breaking spaces to prevent a line break at an
-  undesireable place.
+  Openoffice) or use non-breaking spaces undesirable breaks.
 
 * Likewise, if you inserted extra carriage returns (empty paragraphs)
   in order to change a page break, the result will look bad in the
@@ -145,13 +144,28 @@ To convert a master document, open it in the word processor and exported it as
 an ODT file and convert that. Hyperlinks between the subdocuments of a master
 document will be converted to internal links within the final document.
 
-## Formatting Adjustements for the Web
+## Formatting Adjustments for the Web
 
 Odt2html uses a few CSS tricks improve reading on small screens. For one, the
 margins are cut from 1/2" to 1/8" for narrow screens. Second, multi-column
 layout is disabled for narrow screens.
 
-# Handling of Hyperlinks to Audio and Video Files
+## Spurious Span Tags in the HTML Output
+
+Libreoffice is known to create large numbers of text spans when a document is
+edited. At least some of these are to allow it to later display a history of
+changes. This can be turned off by going to **Tools**, **Options**,
+**LibreOffice Writer**, **Comparison**. Look for the heading **Random number
+to improve accuracy of document comparision** and remove the checkbox
+next to **Store it when changing the document**.
+
+To remove these spans from existing documents, switch the default file format
+used when saving to a non-extended version of ODF by going to **Tools**,
+**Options**, **Load/Save**, **General**. Look for the heading **Default File
+Format and ODF Settings** and change the **ODF format version** to one which
+does not have "Extended" in its name.
+
+## Handling of Hyperlinks to Audio and Video Files
 
 If you put an hyperlink to an audio or video file in the ODT document and set
 the "Target" to "player", Odt2html will create a popup player for it. (If you
