@@ -3,7 +3,7 @@
 #
 # odt2html
 #
-# Copyright 2014--2024, Trinity College Computing Center
+# Copyright 2014--2026, Trinity College Computing Center
 # This file is part of Odt2html.
 #
 # Odt2html is free software: you can redistribute it and/or modify
@@ -44,7 +44,6 @@
 # * https://developers.google.com/structured-data/testing-tool/
 #
 
-from __future__ import print_function
 import zipfile
 import sys
 import os
@@ -65,12 +64,6 @@ import lxml.etree as ET
 from lxml.builder import E
 import lxml.html
 
-# Python 2
-#from urlparse import urlparse
-#from urllib import quote, unquote
-#from urllib import url2pathname
-
-# Python 3
 from urllib.parse import urlparse
 from urllib.parse import quote, unquote
 from urllib.request import url2pathname
@@ -81,6 +74,7 @@ from urllib.request import url2pathname
 
 class Odt2HtmlOptions(object):
 	debug = False						# --debug
+	warnings_formatting = False			# --warnings-formatting
 	output_format = "html"
 	minimize = True						# minimize CSS and Javascript
 	template = None						# --template=
@@ -283,6 +277,8 @@ class Odt2Html(object):
 				self.add_template()
 			if self.opts.minimize:
 				self.minimize()
+			if self.opts.warnings_formatting:
+				self.warnings_formatting()
 			self.save_html(output_filename)
 		elif self.opts.output_format == "epub":
 			self.opts.use_data_urls = False
@@ -296,8 +292,8 @@ class Odt2Html(object):
 			raise AssertionError("Invalid output_format: %s" % self.opts.output_format)
 
 	#------------------------------------------------------------------
-	# Load the style and content XML files into memory and create most of the
-	# output HTML document in memory.
+	# Load the style and content XML files into memory and create most
+	# of the output HTML document in memory.
 	#------------------------------------------------------------------
 	def load_and_convert(self, data_urls=True):
 		# Open the ODT file and show what is inside it
@@ -581,8 +577,6 @@ class Odt2Html(object):
 			# If this paragraph is the first one inside an <LI> tag, put everything
 			# inside the <LI> instead since otherwise if the paragraph is indented
 			# it will move away from the bullet.
-			# FIXME: Does this have something to do with the style rule:
-			#        LI, P { position: relative }
 			if html_parent_el.tag == "li" and self.element_empty(html_parent_el):
 				html_el = html_parent_el
 			else:
@@ -614,7 +608,7 @@ class Odt2Html(object):
 				html_el.text = count * " "
 		elif odt_el.tag == "frame":
 			html_el = self.convert_frame(odt_el)
-			if html_el.tag == "img":			# if simplified to <img>,
+			if html_el.tag == "img":			# if frame was simplified to an <img>,
 				convert_children = False
 		elif odt_el.tag == "text-box":
 			html_el = E.div()
@@ -700,7 +694,7 @@ class Odt2Html(object):
 				)
 
 		# Turn footnotes into LI tags. We later move them to a UL at the end of
-		# the document leaving an A tag in the place of each.
+		# the document leaving an A tag in the text in the place of each.
 		# FIXME: Handling of footnote style is a hack
 		elif odt_el.tag.startswith("note"):
 			#print(f"{odt_el.tag}: {odt_el.attrib}")
@@ -733,7 +727,10 @@ class Odt2Html(object):
 			if style_name is not None:
 				classname, language = self.styles.claim_style(style_name)
 				if classname is not None:
-					html_el.attrib["class"] = classname
+					if "class" in html_el.attrib:
+						html_el.attrib["class"] += (" " + classname)
+					else:
+						html_el.attrib["class"] = classname
 				if language is not None:
 					html_el.attrib["lang"] = language
 				if self.styles.get_break_before(style_name) == "page":
@@ -863,7 +860,7 @@ class Odt2Html(object):
 
 	# Called from convert_element() when it encounters an <a> tag
 	def convert_hyperlink(self, odt_el):
-		assert odt_el.tag == 'a'
+		assert odt_el.tag == "a"
 		href = odt_el.attrib["href"]
 		target = odt_el.attrib.get("target-frame-name")
 
@@ -897,7 +894,7 @@ class Odt2Html(object):
 
 			html_el = E.a({"href":href})
 			if target is not None:
-				html_el.attrib['target'] = target
+				html_el.attrib["target"] = target
 			if href.endswith(".svg"):					# FIXME: not sure we need this long-term
 				html_el.attrib['type'] = "image/svg+xml"
 			if "name" in odt_el.attrib:
@@ -1051,10 +1048,10 @@ class Odt2Html(object):
 				term += self.element_extract_text(el)
 				el = el.getnext()
 		values = []
-		for value in (odt_el.attrib.get('key1'), odt_el.attrib.get('key2'), term):
+		for value in (odt_el.attrib.get("key1"), odt_el.attrib.get("key2"), term):
 			if value is not None:
 				values.append(value)
-		html_el = E.span({'id':"idx%02d" % self.topic_index_counter, 'data-index':json.dumps(values,separators=(',', ':'))})
+		html_el = E.span({"id":"idx%02d" % self.topic_index_counter, "data-index":json.dumps(values,separators=(",", ":"))})
 		self.topic_index_counter += 1
 		html_el.text = odt_el.tail
 		odt_el.tail = None				# so it will not be copied to html_el.tail
@@ -1073,6 +1070,8 @@ class Odt2Html(object):
 			titles = odt_frame.xpath("./title")
 			if len(titles) > 0:
 				html_el.attrib["alt"] = titles[0].text
+			elif " " in (alt := odt_frame.attrib.get("name","")):
+				html_el.attrib["alt"] = alt
 			else:
 				print("  Warning: image without alt text")
 
@@ -1090,6 +1089,8 @@ class Odt2Html(object):
 			# are to produce valid HTML.
 			if odt_frame.attrib.get("anchor-type") == "paragraph":
 				html_el.attrib["hoist"] = "true"
+
+		html_el.attrib["class"] = "frame"
 
 		# Convert the frame's style attributes
 		style = []
@@ -1202,31 +1203,46 @@ class Odt2Html(object):
 
 		# The base stylesheet for web browers
 		self.add_css("""
+			@media print { @page { margin: 0.5in } }
 			HTML,BODY,H1,H2,H3,H4,H4,P,OL,UL,LI { margin:0; padding:0 }
 			BODY { font-family: {{FONT_FAMILY}}; font-size:12pt }
 			H1,H2,H3,H4,H4 { font-size: inherit }
 			UL,OL { list-style-position: outside }
-			LI,P { position: relative }
-			DIV.restrain { max-width: 100%; overflow-x: auto }
-			TABLE { border-collapse: collapse }
-			TH,TD { vertical-align: top }
-			DIV.wrap { display: flex; flex-flow: row wrap }
-			DIV.wrap DIV { display: inline-block; margin: 1px; display: flex; flex-direction: column }
 			HR.pagebreak { margin: 0.5in }
 			SPAN.space { white-space: pre-wrap }
-			DIV.footer { margin-top: 0.2in; font-size: 8pt; white-space: nowrap; max-width: 100%; overflow: hidden }
+
+			TABLE { border-collapse: collapse }
+			TH,TD { vertical-align: top }
+			DIV.restrain { max-width: 100%; overflow-x: auto }
+			DIV.wrap { display: flex; flex-flow: row wrap }
+			DIV.wrap DIV { display: inline-block; margin: 1px; display: flex; flex-direction: column }
+
+			DIV.frame { background-color: white; }
+
+			/* hack to join borders of adjacent paragraphs of a block quote */
+			P.Quotations {
+				background-color: white;
+				}
+			P.Quotations + P.Quotations {
+				padding-top: 4pt;
+				margin-top: -4pt;
+				border-top: none;
+				}
+
 			A.note-citation { font-size: 65%; vertical-align: super; line-height: 0 }
 			UL.notes { list-style-type: none; overflow-y: scroll }
-			UL.notes LI { display: flex; margin: .2em 0 }
-			DIV.note-citation { flex-shrink: 0 }
-			DIV.note-citation A { font-size: 10pt; text-decoration: none; display: block; width: 2rem; }
-			DIV.note-body > * { text-indent: 0; margin-left: 0 } !important
-			@media print { @page { margin: 0.5in } }
+			LI.note { margin: .2em 0 }
+			LI.note > DIV.note-citation { float: left; font-size: 10pt; width: 1.7em }
+			LI.note > DIV.note-citation A { text-decoration: none; }
+			LI.note > DIV.note-body > * { text-indent: 0; margin-left: 0 } !important
+
+			DIV.footer { margin-top: 0.2in; font-size: 8pt; white-space: nowrap; max-width: 100%; overflow: hidden }
 			@media screen {		/* push down footer */
 				HTML { height:100% }
 				BODY { position:relative; box-sizing:border-box; min-height:100%; margin:0 3%; padding:0.3in 0 0.4in }
 				DIV.footer { position:absolute; left:0; bottom:0.1in; margin:0; }
 				}
+
 			""".replace("{{FONT_FAMILY}}",font_family))
 
 		# If we have any "speaking table cells", add extra style rules to put
@@ -1435,8 +1451,8 @@ class Odt2Html(object):
 				if self.opts.debug:
 					print("  %s: wrapping" % table.attrib["class"])
 				table.tag = "div"
-				table.attrib['class'] += " wrap"
-				table_css_style = self.styles._by_css_class(table.attrib['class'])
+				table.attrib["class"] += " wrap"
+				table_css_style = self.styles._by_css_class(table.attrib["class"])
 				table_css_style.template = "DIV.%s"
 				if 'max-width' in table_css_style.properties:
 					del table_css_style.properties['max-width']
@@ -1445,7 +1461,7 @@ class Odt2Html(object):
 					if el.tag == "tbody":
 						for tr in el:
 							el.remove(tr)
-							css_style = self.styles._by_css_class(tr.attrib.get('class'))
+							css_style = self.styles._by_css_class(tr.attrib.get("class"))
 							if css_style is not None:
 								css_style.template = "DIV.%s > DIV"
 								css_style.name = table_css_style.name
@@ -1453,21 +1469,21 @@ class Odt2Html(object):
 								tr.remove(td)
 								td.tag = "div"
 								# If there is a style rule for this table cell and it is not yet converted,
-								css_style = self.styles._by_css_class(td.attrib.get('class',None))
+								css_style = self.styles._by_css_class(td.attrib.get("class",None))
 								if css_style is not None and not 'justify-content' in css_style.properties:
 									css_style.template = "DIV.%s"
 									vertical_align = css_style.properties.pop('vertical-align',None)
 									css_style.properties['justify-content'] = {'top':'flex-start','middle':'center','bottom':'flex-end'}.get(vertical_align,'center')
 								boxes.append(td)
 					elif el.tag == "col":
-						css_style = self.styles._by_css_class(el.attrib.get('class'))
+						css_style = self.styles._by_css_class(el.attrib.get("class"))
 						css_style.template = "DIV.%s > DIV"
 						css_style.name = table_css_style.name
 					table.remove(el)
 				for box in boxes:
 					table.append(box)
 			elif self.opts.debug:
-				print("  %s: no wrapping" % table.attrib['class'])
+				print("  %s: no wrapping" % table.attrib["class"])
 
 	def minimize(self):
 		for el in self.html_head.xpath("//script"):
@@ -1476,6 +1492,30 @@ class Odt2Html(object):
 		for el in self.html_head.xpath("//style"):
 			if el.attrib.get("type") == "text/css" and el.text is not None:
 				el.text = cssmin(el.text)
+
+	def warnings_formatting(self):
+		for el in self.html_body.xpath(".//*"):
+			if el.tag not in ("p", "span"):
+				continue
+			classes = el.attrib.get("class","")
+			if re.match(r"^[PT]\d+$", classes):
+				while True:
+					parent = el.getparent()
+					if parent.tag == "span":
+						el = parent
+					else:
+						break
+				text = el.xpath("string()")
+				if el.tail:
+					text += el.tail
+				for el2 in el.xpath("following-sibling::*"):
+					if len(text) >= 50:
+						break
+					text += el2.xpath("string()")
+					if el2.tail:
+						text += el2.tail
+				text = text[:50]
+				print("Direct:", el.tag, classes, text)
 
 	#------------------------------------------------------------------
 	# Take the HTML BODY object in RAM, wrap it in an HTML element,
@@ -1640,7 +1680,6 @@ class Odt2Html(object):
 			BODY { margin: 0.125in; font-size: 12pt }
 			H1, H2, H3, H4, H4 { font-size: inherit }
 			UL, OL { list-style-position: outside }
-			LI, P { position: relative }
 			TABLE { border-collapse: collapse }
 			TH, TD { vertical-align: top }
 			HR.pagebreak { margin: 0.5in -0.5in 0.5in -0.5in }
@@ -1865,9 +1904,9 @@ class OdtStyle2Css(object):
 			print("  %s %s" % (odt_style.tag, odt_style.attrib))
 
 		if odt_style.tag == "style":
-			css_style = CssStyle(odt_style.attrib['name'])
+			css_style = CssStyle(odt_style.attrib["name"])
 
-			style_family = odt_style.attrib['family']
+			style_family = odt_style.attrib["family"]
 			if style_family == "text":
 				css_style.template = "SPAN.%s"
 			elif style_family == "paragraph":
@@ -1960,19 +1999,25 @@ class OdtStyle2Css(object):
 							if font_family != "":
 								css_style.properties["font-family"] = font_family
 
-					for prop in ("font-size", "font-style", "font-weight", "background-color"):
-						if prop in el.attrib:
-							css_style.properties[prop] = el.attrib[prop]
-
 					# Stash language in CSS object
 					if "language" in el.attrib:
 						css_style.language = el.attrib["language"]
 
-					# Drop black except on spans since we believe it is just noise.
 					if "color" in el.attrib:
 						color = el.attrib["color"]
+						# Drop black except on spans since we believe it is just noise.
 						if color != "#000000" or style_family == "text":
 							css_style.properties["color"] = color
+
+					# Not clear how this is different from background-color in paragraph-properties
+					if "background-color" in el.attrib:
+						color = el.attrib["background-color"]
+						if color != "transparent":
+							css_style.properties["background-color"] = color
+
+					for prop in ("font-size", "font-style", "font-weight"):
+						if prop in el.attrib:
+							css_style.properties[prop] = el.attrib[prop]
 
 					if "text-position" in el.attrib:
 						m = re.match(r"^((super)|(sub)|(\d+%))( (\d+%))?$", el.attrib["text-position"])
@@ -2396,6 +2441,8 @@ if __name__ == "__main__":
 			force = True
 		elif sys.argv[1] == "--verbose":
 			verbose = True
+		elif sys.argv[1] == "--warnings-formatting":
+			opts.warnings_formatting = True
 		elif sys.argv[1] == "--force":
 			force = True
 		elif sys.argv[1] == "--collapse-styles":
