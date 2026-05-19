@@ -1,6 +1,5 @@
 #! /usr/bin/python3
 # odt2html-media-manifest
-# Last modified: 7 January 2018
 #
 # Copyright 2014--2018, Trinity College Computing Center
 # This file is part of Odt2html.
@@ -28,7 +27,7 @@ import re
 
 class MediafileInfo(object):
 	def __init__(self, video_filename):
-		args = "/usr/bin/ffprobe -v quiet -print_format json -show_format -show_streams".split(" ")
+		args = "ffprobe -v quiet -print_format json -show_format -show_streams".split(" ")
 		args.append(video_filename)
 		self.ffprobe = json.loads(subprocess.check_output(args).decode("utf-8"))
 		self.video_stream = None

@@ -52,13 +52,13 @@ import textwrap
 import uuid
 import fnmatch
 import copy
-import codecs
 import json
 from copy import deepcopy
+from base64 import b64encode
+
 from rcssmin import cssmin
 from rjsmin import jsmin
 from PIL import Image
-from base64 import b64encode
 
 import lxml.etree as ET
 from lxml.builder import E
@@ -137,8 +137,8 @@ class Odt2HtmlIndexedArticle(object):
 		self.index = index						# Odt2HtmlIndex object
 		self.section_id = section_id			# <section id="X">
 		self.section_heading = section_heading	# <section><h2> text
-		if u"—" in linked_text and section_id is not None:
-			self.title = linked_text.split(u"—",1)[1]
+		if "—" in linked_text and section_id is not None:
+			self.title = linked_text.split("—",1)[1]
 		else:
 			self.title = linked_text
 	def __str__(self):
@@ -594,7 +594,7 @@ class Odt2Html(object):
 			if len(odt_el) != 0:
 				raise OdfInvalid("<tab> should not have children")
 			html_el = E.span({"class":"tab"})
-			html_el.text = 8 * u" "				# eight non-breaking spaces
+			html_el.text = 8 * " "				# eight non-breaking spaces
 		elif odt_el.tag == "s":					# spaces
 			if len(odt_el) != 0:
 				raise OdfInvalid("<s> should not have children")
@@ -784,9 +784,9 @@ class Odt2Html(object):
 				# * save the document
 				for child in html_el:
 					if child.tag == "span":
-						if child.text == u"\u0301":
+						if child.text == "\u0301":
 							raise OdfBadFormatting("Spurious stress mark span")
-						if child.tail and child.tail.startswith(u"\u0301"):
+						if child.tail and child.tail.startswith("\u0301"):
 							raise OdfBadFormatting("Combining stress mark between spans")
 
 			# If this is a <p> tag, examine it now that its children (if any)
@@ -1430,7 +1430,7 @@ class Odt2Html(object):
 							td.attrib["onclick"] = 'bgplay("%s")' % url
 							td.attrib["class"] = td.attrib.get("class","") + " bgplay"
 						if self.opts.debug:
-							print(u"  %s TD: %s %s" % (td_sound_lang, text, "OK" if url else "Missing"))
+							print("  %s TD: %s %s" % (td_sound_lang, text, "OK" if url else "Missing"))
 						break
 
 	# If a table's name contains the string "Box", convert it to to a box
@@ -2375,8 +2375,8 @@ class LabelSoundFinder(object):
 				self.labels.append([text, "t=%s,%s" % (start, stop)])
 		print("labels:", self.labels)
 	def find(self, text):
-		text = text.replace(u"\u0301","")	# Remove stress marks.
-		text = text.replace(u"ё", u"е")		# Audacity will not accept ё
+		text = text.replace("\u0301","")	# Remove stress marks.
+		text = text.replace("ё", "е")		# Audacity will not accept ё
 		if len(self.labels) > 0 and self.labels[0][0] == text:
 			label = self.labels.pop(0)
 			return "%s.ogg#%s" % (self.base_url, label[1])
@@ -2390,7 +2390,7 @@ class DirSoundFinder(object):
 		self.td_sound_dir = td_sound_dir
 		self.dup_counts = {}
 	def find(self, text):
-		text = text.replace(u"\u0301","")	# Remove stress marks.
+		text = text.replace("\u0301","")	# Remove stress marks.
 		dup_count = self.dup_counts[text] = self.dup_counts.get(text,0) + 1
 		for filename in (
 				"%s/%s-%d" % (self.td_sound_dir, text, dup_count),
@@ -2467,7 +2467,7 @@ if __name__ == "__main__":
 			assert os.path.isfile(opts.template)
 		elif sys.argv[1].startswith("--player-lib-dir="):
 			opts.player_lib_dir = sys.argv[1][17:]
-			assert os.path.isdir(opts.player_lib_dir)
+			#assert os.path.isdir(opts.player_lib_dir)
 		elif sys.argv[1] == "-o":
 			if len(sys.argv) >= 3:
 				sys.argv.pop(1)	# -o
@@ -2485,7 +2485,7 @@ if __name__ == "__main__":
 	count_rebuilt = 0
 	for filename in sys.argv[1:]:
 		if verbose:
-			print(u"\"%s\"" % filename)
+			print("\"%s\"" % filename)
 		filename_mtime = os.path.getmtime(filename)
 
 		basename, ext = os.path.splitext(filename)
@@ -2541,4 +2541,3 @@ if __name__ == "__main__":
 			print("  up-to-date")
 
 	print("Built %d and rebuilt %d of %d files." % (count_built, count_rebuilt, count_total))
-
