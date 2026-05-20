@@ -1,14 +1,15 @@
 "use strict";
 
 var zoomed_image = null;
+var css_href = new URL("zoom_image-v1.css", document.currentScript.src).href;
 
-window.addEventListener('DOMContentLoaded', function () {
+window.addEventListener("DOMContentLoaded", function () {
 
 	/* Load CSS */
 	var el = document.createElement("link");
 	el.rel = "stylesheet";
 	el.type = "text/css";
-	el.href = "/lib/odt2html/zoom_image-v1.css";
+	el.href = css_href;
 	document.head.appendChild(el);
 
 	/* Add click handlers to the image links */
@@ -16,12 +17,12 @@ window.addEventListener('DOMContentLoaded', function () {
 	for(var i=0; i < links.length; i++) {
 		var link = links[i];
 		if(link.hash === "#zoom_image") {
-			link.addEventListener('click', zoom_image);
+			link.addEventListener("click", zoom_image);
 		}
 	}
 
 	/* If the user clicks elsewhere anywhere, remove the popup image. */
-	document.addEventListener('click', function() {
+	document.addEventListener("click", function() {
 		if(zoomed_image !== null) {
 			document.body.removeChild(zoomed_image);
 			zoomed_image = null;

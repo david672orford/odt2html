@@ -1,0 +1,30 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta content="text/html; charset=utf-8" http-equiv="content-type">
+<title>Title Prefix</title>
+<style type="text/css">
+ NAV DIV { position: fixed; background-color: white; z-index: 1; font-size: 11pt; }
+ @media print { NAV { display: none } }
+ NAV DIV A { display: inline-block; text-decoration: none; padding: .3em; border-style: solid; border-color: black; }
+ @media (max-width: 6in) { NAV { font-size: 8pt } }
+ DIV#upbox { top: 0; left: 0; }
+ DIV#upbox A { border-width: 0 1px 1px 0; }
+ DIV#dlbox { top: 0; right: 0; }
+ DIV#dlbox A { border-width: 0 0 1px 1px; }
+</style>
+</head>
+<body>
+<nav>
+  <div id="upbox">
+    <a href="{{BACK_TO_DOCDIR}}" title="Return to Document Directory">▲UP</a>
+  </div>
+  <div id="dlbox">
+    <a href="{{PDF}}" download type="application/pdf" rel="nofollow" title="Download this page as a PDF file for high-quality printing">
+		▼PDF</a
+	><a href="{{ODT}}" download type="application/vnd.oasis.opendocument.text" rel="nofollow" title="Download this page as an Opendocument word processing file">
+		▼ODT</a>
+  </div>
+</nav>
+</body>
+</html>

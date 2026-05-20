@@ -1,28 +1,48 @@
 # Odt2html
 
-This program converts Opendocument word-processing files such as those
-produced by Openoffice into clean HTML files. It can also produce ebooks
-in Epub format.
+This program converts Opendocument word-processing (ODT) files such as those
+produced by Openoffice, Libreoffice, or Abiword into clean HTML files. It can
+also produce e-books in EPUB format.
 
-Odt2html is not intended to convert all possible ODT files into a visually
-identical HTML representation. Openoffice and Libreoffice already provide
-such a function. Instead it is intended to be used with documents which
-were formatted with eventual conversion to HTML in mind. With care documents
-can be formatted so that they will look good both in print and on the web.
+Odt2html is intended to be used in a workflow which produces documents for the
+World Wide Web. It mplements a substantial subset of ODF formatting, but it is
+not intended to convert all possible ODT files into a HTML, to precisely mimic
+the print version, or to implement every feature. Openoffice and Libreoffice
+already provide an export function which accomplishes this. Instead the emphasis
+has been placed on producing straighforward and natural HTML which adapt to
+screens and pages of various sizes.
+
+While the implementation is not complete, it covers all of the standard
+wordprocessing features including font changes, margins, tables, frames, images,
+headers, footers, and endnotes. Images may be in in PNG, JPEG and drawings in SVG
+format. ODF drawings are not implemented.
+
+A number of extensions are provided:
+
+* Conversion of user-specified frames into <nav> elements
+* Zooming of selected images
+* Conversion of selected tables into reflowable containers
+* Clickable table cells which play sound
+* A multimedia player which can be triggered by hyperlinks
+* A moving highlighter driven by a VTT file
+
+These extensions are described in more detail below.
 
 ## Usage
 
-    odt2html [--debug] [--force] [--epub] <filename.odt>...
- 
+    odt2html [options] <filename.odt>...
+
       --verbose                     Show what files are being processed
       --debug                       Print debug messages
       --force                       Regenerate the output file even if the
                                     input file is not newer
+      -o <directory>                Write HTML files to this directory, rather than dirctory of each ODT file
       --epub                        Break the output into one HTML file per
                                     section and wrap them in an EPUB file
-      --template=<filename>         Skeletal HTML file into which to insert
-                                    converted document
-      --index=<filename>            User-provided HTML index of converted
+      --warnings-formatting         List instances of direct formatting
+      --font-support-level {0,1,2}  0=weight and slant, 1=generic families, 2=specified families
+      --docdir=<filename>           User-provided HTML index of converted
+      --template=<filename>         HTML file with <head> and body <body> material
                                     documents. Used to create "back" links.
                                     Also transfer Opengraph and Schema.org
                                     metadata from these indexes to the page.
@@ -111,6 +131,10 @@ version it will be reflowed to suit the size of the viewer's window.
 This generally works so well that documents originally formatted for
 US Letter paper can be read conformatly on the screen of a smartphone.
 
+## Changes in Version 2.00
+
+* --index is not --dirindex to avoid confusion with a document's topic index
+
 ## Supported ODF Features
 
 * Headings
@@ -126,7 +150,7 @@ US Letter paper can be read conformatly on the screen of a smartphone.
 * Vector drawings in SVG format
 * Multiple columns
 
-## No Plans to Support 
+## No Plans to Support
 
 * Embedded Openoffice drawings (we suggest you use SVG instead)
 * Tabs (not supported in HTML)
@@ -168,7 +192,7 @@ does not have "Extended" in its name.
 ## Handling of Hyperlinks to Audio and Video Files
 
 If you put an hyperlink to an audio or video file in the ODT document and set
-the "Target" to "player", Odt2html will create a popup player for it. (If you
+the **Target** to "player", Odt2html will create a popup player for it. (If you
 do not set the target attribute, the browser will handle it however it thinks
 best.)
 
@@ -179,9 +203,27 @@ links, and a close button.
 The video player pops up in the middle of the window. It has a title bar
 with download links and a close button. It can be dragged around the screen.
 
-If you have media files in multiple formats or video resolutions, you should
-create a manifest file using odt2html-media-manifest and point the hyperlink
-to that.
+If you encoded your video file in multiple formats or video resolutions, the
+player can select the most appropriate format. Supported formats include MP4,
+WEBM, HTML, and DASH. Since Write does not provide a way to specify all the
+necessary files, you use use **odt2html-mkmanifest** to create a JSON
+manifest file. You can then select the manifest as the hyperlink target in
+Write.
+
+## Zoomable Images Extension
+
+If you set the **Hyperlink** of an image to #zoom\_image, then the image will be
+enlarged for easier viewing when the user clicks on it. This works best with
+images which have sufficient resolution are are resolution-independent, such
+as SVG drawings.
+
+## Reflowable Grid Layout Extension
+
+Odt2html provides an extension to the ODT format for creating grid layouts
+which reflow displaying only as many columns as will fit on the page.
+You can enable this feature by creating a table and including the substring
+"Wrap" in its name. The cells will then flow into the available page much as
+if they were words on a page or thumbnail images in a photo gallery.
 
 ## Speaking Table Cells Extension
 
@@ -199,23 +241,18 @@ should be two values separated by a colon:
   a speaking table cell. (You may used an asterisk as a wildcard.)
 * A file system path relative to the ODT file. It should point either to a
   directory or to an Audacity labels file with an extension of .txt.
-  * If it is a directory, it should contain audio files for each table cell.
+  * If it is a directory, it should contain an audio file for each table cell.
     The names of the files without the extension should match the text of
     the cooresponding table cell. You should provide files in both MP3 and
     OGG formats.
   * If its is an Audacity labels file, it should contain labels that match the
     text in the same order as in the ODT file. There should be one MP3 and one
-    OGG file alongside it with the same base name.
+    OGG file alongside it (in the same directory) with the same base name.
 
 If the text in a table cell (though of the correct language) does not match
 a file in the directory specified or the next message in the Audacity labels
 file, it will be skipped and that cell will not speak.
 
-## Reflowable Grid Layout Extension
+## Moving Highlight
 
-Odt2html provides an extension to the ODT format for creating grid layouts
-which reflow displaying only as many columns as will fit on the page.
-You can enable this feature by creating a table and including the substring
-"Wrap" in its name. The cells will then flow into the available page much as
-if they were words on a page or thumbnail images in a photo gallery.
-
+TODO

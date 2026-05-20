@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Odt2HTML"
+version = "0.1"
+description="Convert Opendocument text documents to HTML",
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.txt" }
+keywords = ["odt", "odf", "Openoffice", "Libreoffice", "web", "www", "hypertext", "utils", "tools", "html", "svg"]
+authors = [{ name = "David Chappell", email = "chappell@trincoll.edu" }]
+maintainers = [{ name = "David Chappell", email = "chappell@trincoll.edu" }]
+# https://pypi.org/classifiers/
+classifiers = [
+	"Development Status :: 3 - Alpha",
+	"Environment :: Console",
+	"Topic :: Internet :: WWW/HTTP",
+	"Topic :: Text Processing :: Markup :: HTML",
+	"License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+	"Programming Language :: Python :: 3.10",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Programming Language :: Python :: 3 :: Only",
+	]
+dependencies = [
+	"lxml",
+	"rcssmin",
+	"rjsmin",
+	"Pillow",
+	]
+
+[project.urls]
+"Homepage" = "https://github.com/david672orford/odt2html"
+
+[project.scripts]
+odt2html = "odt2html.cli.odt2html:main"
+odt2html-mkmanifest = "odt2html.cli.odt2html_mkmanifest:main"
+odf-tool = "odt2html.cli.odf_tool:main"
+odf-vim = "odt2html.cli.odf_vim:main"
+
