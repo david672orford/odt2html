@@ -14,7 +14,7 @@ class HtmlTemplate:
 		self.html_body = converter.html_body
 		self.odt_filename = converter.odt_filename
 		self.output_dirname = converter.output_dirname
-		self.docdir_entry = converter.docdir_entry
+		self.dirindex_entry = converter.dirindex_entry
 
 	def run(self):
 		template = lxml.html.parse(open(self.template))
@@ -42,13 +42,13 @@ class HtmlTemplate:
 			levels = 0
 		else:
 			levels = (self.output_dirname.count("/") + 1)
-			if self.docdir_entry is not None and self.docdir_entry.index.dirname != "":
-				levels -= self.docdir_entry.index.dirname.count("/")
+			if self.dirindex_entry is not None and self.dirindex_entry.dirindex.dirname != "":
+				levels -= self.dirindex_entry.dirindex.dirname.count("/")
 		back_to_index = ("../" * levels) if levels > 0 else "./"
 
 		# If available, add the fragment identifier of the index section which lists this document
-		if self.docdir_entry is not None and self.docdir_entry.section_id is not None:
-			back_to_index = "%s#%s" % (back_to_index, self.docdir_entry.section_id)
+		if self.dirindex_entry is not None and self.dirindex_entry.section_id is not None:
+			back_to_index = "%s#%s" % (back_to_index, self.dirindex_entry.section_id)
 
 		# Copy elements from the template's body while interpolating
 		# various values indicated in {{varname}} notation.

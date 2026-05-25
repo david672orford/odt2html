@@ -21,6 +21,7 @@ namespaces = {
 	"number":    "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0",
 	"svg":       "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
 	"form":      "urn:oasis:names:tc:opendocument:xmlns:form:1.0",
+	"loext":     "urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0" ,
 	}
 
 # Translate namespace URIs to prefixes

@@ -42,7 +42,7 @@ def valid_dir(value:str) -> str:
 		raise argparse.ArgumentTypeError(f"Directory not found: {value}")
 	return value
 
-def valid_docdir(value:str) -> Odt2HtmlDirectoryIndex:
+def valid_dirindex(value:str) -> Odt2HtmlDirectoryIndex:
 	value = valid_file(value)
 	return Odt2HtmlDirectoryIndex(value)
 
@@ -59,12 +59,13 @@ def main() -> int:
 	_=parser.add_argument("--epub", dest="output_format", action="store_const", const="epub", help="Create Epub containing one HTML file per section")
 	_=parser.add_argument("--warnings-formatting", action="store_true", help="List instances of direct formatting")
 	_=parser.add_argument("--font-support-level", type=int, choices=(0,1,2), help="0=weight and slant, 1=generic families, 2=specified families")
-	_=parser.add_argument("--dirindex", dest="docdirs", action="append", type=valid_docdir, help="index.html listing these documents")
+	_=parser.add_argument("--dirindex", dest="dirindexes", action="append", type=valid_dirindex, metavar="HTML_FILE", help="index.html listing these documents")
+	_=parser.add_argument("--index", dest="dirindexes", action="append", type=valid_dirindex, help=argparse.SUPPRESS)
 	_=parser.add_argument("--template", type=valid_file, help="HTML file with <head> and <body> boilerplate to add")
 	_=parser.add_argument("--site-name", type=valid_string, help="Name of website for Opengraph metadata")
 	_=parser.add_argument("--site-url", type=valid_url, help="Base URL of site for constructing page URLs")
-	_=parser.add_argument("--nav-names", type=valid_list, help="Names frames to convert as <nav> elements")
-	_=parser.add_argument("--player-lib-dir", type=valid_dir, help="Path on web server to media player files, relative to HTML")
+	_=parser.add_argument("--nav-names", type=valid_list, metavar="LIST", help="Names frames to convert as <nav> elements")
+	_=parser.add_argument("--player-lib-dir", type=valid_dir, metavar="PATH", help="Path on web server to media player files, relative to HTML")
 	_=parser.add_argument("filenames", nargs="+", help="List of files to process")
 	opts = parser.parse_args(namespace=Opts())
 
@@ -119,6 +120,8 @@ def main() -> int:
 					print(f"Failure converting {filename}")
 					raise
 				sys.stderr.write(f"Conversion failed: {e.__doc__}: {str(e)}\n")
+				if not opts.debug:
+					print("Rerun with --debug for a stack trace.")
 				return 1
 
 			# Make the creation time of the HTML file one millisecond after the

@@ -8,7 +8,7 @@ from odt2html.utils import element_extract_text
 
 class TDSound:
 	def __init__(self, converter):
-		self.debug = converter.debug
+		self.debug = converter.opts.debug
 		self.output_dirname = converter.output_dirname
 		self.html_body = converter.html_body
 		self.add_script = converter.add_script
@@ -72,13 +72,19 @@ class LabelSoundFinder:
 		self.output_dirname = output_dirname
 		self.base_url = quote(soundfile_basename)
 		self.labels = []
-		with open(os.path.join(self.output_dirname, "%s.txt" % soundfile_basename), "r", encoding="utf-8") as f:
+		labels_file = os.path.join(self.output_dirname, "%s.txt" % soundfile_basename)
+		print(f"Reading labels from: {labels_file}")
+		with open(labels_file, "r", encoding="utf-8") as f:
 			for line in f:
 				start, stop, text = line.rstrip().split("\t")
 				assert re.match(r"^\d+\.\d+$", start)
 				assert re.match(r"^\d+\.\d+$", stop)
-				self.labels.append([text, "t=%s,%s" % (start, stop)])
-		print("labels:", self.labels)
+				label = (
+					text,
+					"t=%s,%s" % (start, stop)
+					)
+				self.labels.append(label)
+				print("  %s: %s" % label)
 	def find(self, text:str):
 		text = text.replace("\u0301","")	# Remove stress marks.
 		text = text.replace("ё", "е")		# Audacity will not accept ё

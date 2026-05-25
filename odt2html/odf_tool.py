@@ -1,3 +1,5 @@
+"""Library for manipulating OSF files"""
+
 import os
 import zipfile
 import re
@@ -279,7 +281,7 @@ class Styles(OrderedDict):
 	def add_style_obj(self, style):
 		self[style.name] = style
 
-class Style(object):
+class Style:
 	def __init__(self, styles, group_name, style_el):
 		self.styles = styles
 		self.group_name = group_name

@@ -23,6 +23,7 @@ from odt2html.template import HtmlTemplate
 from odt2html.metadata import HtmlMetadata
 from odt2html.linter import Linter
 from odt2html.epub import EpubWriter
+from odt2html.graphics import convert_custom_shape, convert_rect, convert_line
 
 class Odt2Html:
 	"""This does the actual conversion from ODT to HTML"""
@@ -45,7 +46,7 @@ class Odt2Html:
 		self.html_head.append(E.meta({"http-equiv":"content-type","content":"text/html; charset=utf-8"}))
 		self.html_body:ET._Element = E.body()
 
-		self.docdir_entry = self.opts.dirindexes.find_entry(output_filename)
+		self.dirindex_entry = self.opts.dirindexes.find_entry(output_filename)
 
 		self.open_odt()
 		self.styles = self.load_styles()
@@ -148,7 +149,6 @@ class Odt2Html:
 		styles = Styles(self.opts)
 
 		# Load the font definitions from styles.xml and content.xml
-		print(self.styles_xml)
 		for font_face_decls in (
 			self.styles_xml.xpath("/office:document-styles/office:font-face-decls")[0],
 			self.content_xml.xpath("/office:document-content/office:font-face-decls")[0],
@@ -180,7 +180,7 @@ class Odt2Html:
 		# Search for the title of the document. Priority:
 		# 1) Metadata
 		# 2) Contents of level 1 heading
-		titles = meta.xpath("./meta:title")
+		titles = meta.xpath("./dc:title")
 		if len(titles) > 0 and titles[0].text is not None:
 			metadata["title"] = titles[0].text
 		else:
@@ -191,7 +191,7 @@ class Odt2Html:
 			raise OdfNotSupported("No document title")
 
 		# Search for the description of the document
-		subjects = meta.xpath("./meta:subject")
+		subjects = meta.xpath("./dc:subject")
 		if len(subjects) > 0 and subjects[0].text is not None:
 			metadata["description"] = subjects[0].text
 
@@ -382,8 +382,12 @@ class Odt2Html:
 
 		# Graphics
 		elif odt_el.tag == "draw:custom-shape":
-			html_el = self.convert_custom_shape(odt_el)
+			html_el = convert_custom_shape(odt_el, self.opts.debug)
 			convert_children = False
+		elif odt_el.tag == "draw:rect":
+			html_el = convert_rect(odt_el, self.opts.debug)
+		elif odt_el.tag == "draw:line":
+			html_el = convert_line(odt_el, self.opts.debug)
 
 		# Tables
 		elif odt_el.tag.startswith("table:"):
@@ -479,8 +483,8 @@ class Odt2Html:
 		elif odt_el.tag == "draw:control":
 			html_el = E.span(
 				{"style":"border: thin solid black;display:inline-block;width:100%%;max-width:%s;height:%s" % (
-					odt_el.attrib["width"],
-					odt_el.attrib["height"]
+					odt_el.attrib["svg:width"],
+					odt_el.attrib["svg:height"]
 					)}
 				)
 
@@ -518,23 +522,24 @@ class Odt2Html:
 
 			if style_name is not None:
 				style = self.styles.claim_style(odt_el, html_el, style_name)
-				if not style.simplified_td:
-					if "class" in html_el.attrib:
-						html_el.attrib["class"] += (" " + style.className)
-					else:
-						html_el.attrib["class"] = style.className
-				if style.language is not None:
-					html_el.attrib["lang"] = style.language
-				if style.tag_override is not None:
-					html_el.tag = style.tag_override
-				if style.break_before == "page":
-					# This element should appear at the top of a new page.
-					assert html_parent_el is not None
-					if len(self.html_body) > 0 or len(html_parent_el) > 0:		# if not at top of first page,
-						if len(html_parent_el):									# if parent already has content
-							html_parent_el.append(E.hr({"class":"pagebreak"}))
-						else:													# otherwise, try to get it above parent
-							self.html_body.append(E.hr({"class":"pagebreak"}))
+				if style is not None:
+					if not style.simplified_td:
+						if "class" in html_el.attrib:
+							html_el.attrib["class"] += (" " + style.className)
+						else:
+							html_el.attrib["class"] = style.className
+					if style.language is not None:
+						html_el.attrib["lang"] = style.language
+					if style.tag_override is not None:
+						html_el.tag = style.tag_override
+					if style.break_before == "page":
+						# This element should appear at the top of a new page.
+						assert html_parent_el is not None
+						if len(self.html_body) > 0 or len(html_parent_el) > 0:		# if not at top of first page,
+							if len(html_parent_el):									# if parent already has content
+								html_parent_el.append(E.hr({"class":"pagebreak"}))
+							else:													# otherwise, try to get it above parent
+								self.html_body.append(E.hr({"class":"pagebreak"}))
 
 			if convert_children:
 				self.convert_children(odt_el, html_el, list_style_name, depth)
@@ -627,7 +632,7 @@ class Odt2Html:
 				if child.text == "\u0301":
 					raise OdfBadFormatting("Spurious stress mark span")
 				if child.tail and child.tail.startswith("\u0301"):
-					raise OdfBadFormatting("Combining stress mark between spans")
+					raise OdfBadFormatting("Combining stress mark between spans: %s" % child.text)
 
 	def convert_index_mark(self, odt_el:ET._Element):
 		"""Turn alphabetical index entry mark into a <span> with an ID"""
@@ -799,23 +804,6 @@ class Odt2Html:
 					assert isinstance(style, TableCellStyle)
 					style.is_th = True
 
-	def convert_custom_shape(self, odt_el:ET._Element):
-		assert odt_el.tag == "draw:custom-shape"
-		if self.opts.debug:
-			print(f"Custom shape: {repr(odt_el.attrib)}")
-		shape:ET._Element = E.div({"id": odt_el.attrib["draw:name"]})
-		style = []
-		for attrib in ("height", "width", "x", "y"):
-			value = odt_el.attrib.get(f"svg:{attrib}")
-			if value is not None:
-				style.append(f"{attrib}:{value}")
-		shape.attrib["style"] = ";".join(style)
-		for child in odt_el:
-			if odt_el.tag == "draw:enhanced-geometry":
-				svg = E.svg()
-				shape.append(svg)
-		return shape
-
 	#------------------------------------------------------------------
 	# Pass 3
 	#------------------------------------------------------------------
@@ -866,6 +854,8 @@ class Odt2Html:
 				notes_ul.append(note)
 			self.html_body.append(notes_ul)
 
+		for graphic in self.html_body.xpath(".//svg[@class='graphic']"):
+			graphic.getparent().attrib["style"] = "position: relative;"
 	#------------------------------------------------------------------
 	# Resources Handling
 	#------------------------------------------------------------------

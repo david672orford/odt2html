@@ -11,8 +11,8 @@ class HtmlMetadata:
 		self.site_name = converter.opts.site_name
 		self.site_url = converter.opts.site_url
 		self.page_url = converter.opts.site_url + quote(converter.output_filename)
-		self.indexes = converter.opts.indexes
-		self.docdir_entry = converter.docdir_entry
+		self.dirindexes = converter.opts.dirindexes
+		self.dirindex_entry = converter.dirindex_entry
 		self.metadata = converter.metadata
 		self.html_head = converter.html_head
 
@@ -59,8 +59,8 @@ class HtmlMetadata:
 		linked_data = []
 
 		if "og:image" in self.metadata:
-			assert len(self.indexes) > 0
-			index = self.indexes[0]
+			assert len(self.dirindexes) > 0
+			index = self.dirindexes[0]
 			assert self.metadata["og:image"].endswith(".png")
 			assert os.path.isfile(self.metadata["og:image"])
 			assert "title" in self.metadata
@@ -84,20 +84,20 @@ class HtmlMetadata:
 				article["description"] = self.metadata["description"]
 			linked_data.append(article)
 
-		if self.docdir_entry is None:
+		if self.dirindex_entry is None:
 			print("  Warning: document not listed in index, no BreadcrumbList created")
 		else:
-			breadcrumblist = self.docdir_entry.index.breadcrumblist[:]
+			breadcrumblist = self.dirindex_entry.dirindex.breadcrumblist[:]
 
 			# the index section which lists this document (if there is one)
-			if self.docdir_entry.section_id is not None and self.docdir_entry.section_heading is not None:
+			if self.dirindex_entry.section_id is not None and self.dirindex_entry.section_heading is not None:
 				breadcrumblist.append(
 					{
 					"@type": "ListItem",
 					"position": len(breadcrumblist) + 1,
 					"item": {
-						"@id": self.site_url + "#" + self.docdir_entry.section_id,
-						"name": self.docdir_entry.section_heading
+						"@id": self.site_url + "#" + self.dirindex_entry.section_id,
+						"name": self.dirindex_entry.section_heading
 						}
 					})
 
@@ -107,7 +107,7 @@ class HtmlMetadata:
 				"position": len(breadcrumblist) + 1,
 				"item": {
 					"@id": self.page_url,
-					"name": self.docdir_entry.title
+					"name": self.dirindex_entry.title
 					}
 				})
 

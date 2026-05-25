@@ -37,8 +37,9 @@ class WrappedTables:
 				if tchild.tag == "tbody":
 					for tr in tchild:
 						style = self.styles.claims.get(tr)
-						style.template = "DIV.%s > DIV"
-						style.name = table_style.name
+						if style is not None:
+							style.template = "DIV.%s > DIV"
+							style.name = table_style.name
 
 						for td in tr:
 							td.tag = "div"

@@ -139,11 +139,11 @@ class Style(BaseStyle):
 
 			"drawing-page": "DIV.%s"
 			}.get(family)
-
 		if template is None:
 			raise OdfNotImplementedYet(f"Style family {family} not implemented")
 
 		super().__init__(family, odt_style.attrib["style:name"], parent, template)
+
 		self.load_children(odt_style, fonts, opts)
 
 	def load_children(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig):
@@ -445,17 +445,16 @@ class Styles(UserDict):
 		# Make first pass.
 		dependent = []
 		for style in odt_stylesheet:
-			if not self.on_tag(style):
+			if not self.on_tag(style, pass1=True):
 				if self.opts.debug:
 					print("    deferring loading")
 				dependent.append(style)
 
 		# Make a second pass to convert styles which had unresolved dependencies.
 		for style in dependent:
-			if not self.on_tag(style):
-				raise OdfInvalid("missing parent for style: %s %s" % (style.tag, style.attrib))
+			self.on_tag(style, pass1=False)
 
-	def on_tag(self, odt_style:ET._Element) -> bool:
+	def on_tag(self, odt_style:ET._Element, pass1:bool) -> bool:
 		"""Load a style tag and its children. Return true if all dependencies have been met."""
 		if self.opts.debug:
 			print("  <%s %s>" % (
@@ -465,7 +464,7 @@ class Styles(UserDict):
 		if odt_style.tag == "style:default-style":
 			return self.on_tag_default_style(odt_style)
 		if odt_style.tag == "style:style":
-			return self.on_tag_style(odt_style)
+			return self.on_tag_style(odt_style, pass1)
 		if odt_style.tag == "text:list-style":
 			return self.on_tag_list_style(odt_style)
 		if self.opts.debug:
@@ -489,17 +488,21 @@ class Styles(UserDict):
 
 		return True
 
-	def on_tag_style(self, odt_style:ET._Element) -> bool:
+	def on_tag_style(self, odt_style:ET._Element, pass1:bool) -> bool:
 		"""Implementation of <style:style>"""
 		assert odt_style.tag == "style:style"
 		family = odt_style.attrib["style:family"]
 
-		if "style:parent-style-name" in odt_style.attrib:
-			parent_style = self.get((family, odt_style.attrib["style:parent-style-name"]))
+		parent_style = None
+		parent_style_name = odt_style.attrib.get("style:parent-style-name")
+		if parent_style_name is not None:
+			parent_style = self.get((family, parent_style_name))
 			if parent_style is None:
-				return False
-		else:
-			parent_style = None
+				if pass1:
+					return False
+				else:
+					#raise OdfInvalid("missing parent of: %s %s" % (style.tag, style.attrib))
+					print(f"Warning: style wants parent: {odt_style.tag} {odt_style.attrib}")
 
 		if family == "table-cell":
 			style = TableCellStyle(odt_style, parent_style, self.fonts, self.opts)
@@ -521,13 +524,15 @@ class Styles(UserDict):
 		self.byname[style.name] = style
 		return True
 
-	def claim_style(self, odt_el, html_el, style_name:str) -> BaseStyle:
+	def claim_style(self, odt_el, html_el, style_name:str) -> BaseStyle|None:
 		"""
 		The HTML generator calls this when it emits an element which uses a style.
 		We set the used flag, and the caller gets the style.
 		"""
 		if style_name not in self.byname:
-			raise OdfInvalid(f"Missing style: {odt_el} {style_name}")
+			#raise OdfInvalid(f"A {odt_el.tag} uses undefined style \"{style_name}\"")
+			print(f"Warning: A {odt_el.tag} uses undefined style \"{style_name}\"")
+			return None
 		style = self.byname[style_name]
 		style.used = True
 		self.claims[html_el] = style
@@ -539,7 +544,7 @@ class Styles(UserDict):
 		@media print { @page { margin: 0.5in } }
 		HTML,BODY,H1,H2,H3,H4,H4,P,OL,UL,LI { margin:0; padding:0 }
 		BODY { font-size:12pt }
-		H1,H2,H3,H4,H4 { font-size: inherit }
+		H1,H2,H3,H4,H5 { font-size: inherit }
 		UL,OL { list-style-position: outside }
 		HR.pagebreak { margin: 0.5in }
 		SPAN.space { white-space: pre-wrap }
@@ -581,6 +586,7 @@ class Styles(UserDict):
 		"""Return document styles converted to CSS"""
 		rules = []
 
+		# TODO: font level 1 should not set family
 		if self.opts.font_support_level >= 2 and self.default_font_family is not None:
 			font_family = "'{font_family}',serif".format(font_family=self.default_font_family)
 		else:

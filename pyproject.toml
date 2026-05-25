@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "Odt2HTML"
 version = "0.1"
-description="Convert Opendocument text documents to HTML",
+description = "Convert Opendocument text documents to HTML"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.txt" }
@@ -32,11 +32,10 @@ dependencies = [
 	]
 
 [project.urls]
-"Homepage" = "https://github.com/david672orford/odt2html"
+Homepage = "https://github.com/david672orford/odt2html"
 
 [project.scripts]
 odt2html = "odt2html.cli.odt2html:main"
 odt2html-mkmanifest = "odt2html.cli.odt2html_mkmanifest:main"
 odf-tool = "odt2html.cli.odf_tool:main"
 odf-vim = "odt2html.cli.odf_vim:main"
-

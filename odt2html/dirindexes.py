@@ -100,8 +100,8 @@ class Odt2HtmlDirectoryIndex(dict):
 		return "<Odt2HtmlDocdir filename=\"%s\", %d entries>" % (self.filename, len(self.keys()))
 
 class Odt2HtmlArticle:
-	def __init__(self, docdir:Odt2HtmlDirectoryIndex, section_id, section_heading, linked_text:str):
-		self.docdir:Odt2HtmlDirectoryIndex = docdir
+	def __init__(self, dirindex:Odt2HtmlDirectoryIndex, section_id, section_heading, linked_text:str):
+		self.dirindex:Odt2HtmlDirectoryIndex = dirindex
 		self.section_id = section_id			# <section id="X">
 		self.section_heading = section_heading	# <section><h2> text
 		if u"—" in linked_text and section_id is not None:

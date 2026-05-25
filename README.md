@@ -121,7 +121,7 @@ ensure your document looks good both when printed and on the web.
   of normal text inside a run of superscript or subscript text. HTML has no
   provision for this. It would be very tricky for Odt2html to unnest the
   spans, so instead you are expected to fix it in the source document.
-  Select the text in question, chose Format-&gt;Clear Direct Formatting, and
+  Select the text in question, choose Format-&gt;Clear Direct Formatting, and
   then select the parts which should be superscripts or subscripts and again
   format them as such.
 
@@ -131,9 +131,9 @@ version it will be reflowed to suit the size of the viewer's window.
 This generally works so well that documents originally formatted for
 US Letter paper can be read conformatly on the screen of a smartphone.
 
-## Changes in Version 2.00
+## Incompatible Changes in Version 2.00
 
-* --index is not --dirindex to avoid confusion with a document's topic index
+* --index is now --dirindex to avoid confusion with a document's topic index
 
 ## Supported ODF Features
 

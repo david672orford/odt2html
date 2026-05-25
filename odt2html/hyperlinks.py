@@ -108,8 +108,8 @@ class HyperlinkConverter:
 			# FIXME: how exactly does this work?
 			path_from_cwd = os.path.join(self.output_dirname, filename)
 
-			# If it is a JSON files, we assume it is a media manifest file such as
-			# created by our odt2html-media-manifest tool.
+			# If it is a JSON file, we assume it is a media manifest file such as
+			# created by our odt2html-mkmanifest.
 			if os.path.splitext(filename)[1].lower() == ".json":
 				if self.opts.debug:
 					print("  Play from a pre-generated media manifest")
@@ -119,8 +119,8 @@ class HyperlinkConverter:
 				if not ("audio" in manifest or "video" in manifest):
 					raise OdfBadPlayer("Media manifest %s is empty" % path_from_cwd)
 
-			# Otherwise is is presumably a bare media file. We will create
-			# a minimimal manifest for it.
+			# Otherwise is is presumably a single media file. We will
+			# create a basic manifest describing it.
 			else:
 				if self.opts.debug:
 					print("  Play a single local file")
