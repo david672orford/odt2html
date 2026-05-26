@@ -9,12 +9,16 @@ from collections import UserDict
 
 import lxml.etree as ET
 
+from odt2html.console import Console
 from odt2html.exceptions import OdfNotImplementedYet, OdfInvalid
 from odt2html.config import Odt2HtmlConfig
 from odt2html.utils import normalize_dimensions, dimension2points
 
 class FontFace:
+	"""Description of a font face and info for substitution"""
+
 	def __init__(self, font_face:ET._Element):
+		assert font_face.tag == "style:font-face"
 		self.name = font_face.attrib["style:name"]
 		self.font_family = font_face.attrib["svg:font-family"]
 		self.font_family_generic = font_face.attrib.get("style:font-family-generic")
@@ -31,6 +35,8 @@ class FontFace:
 		}
 
 	def get_css(self, font_support_level:int) -> str:
+		"""Convert this font-face """
+
 		font_families = []
 
 		# Specific font family name
@@ -53,40 +59,319 @@ class FontFace:
 		return ",".join(font_families)
 
 class FontFaces(UserDict):
-	pass
+	"""Font face lookup"""
 
-class BaseStyle:
+class StylePropertiesBase:
+	"""Base class for <style:*-properites>"""
+	def __init__(self, style_el:ET._Element, attrib:dict, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
+		self.attrib = attrib
+		self.fonts = fonts
+		self.opts = opts
+		self.console = console
+		self.parent = None
+		self.init(style_el)
+	def init(self, style_el:ET._Element):
+		pass
+	def get_attrib(self, name:str, default:str|None=None):
+		"""Retrieve a style attribute extending the search to parents and grandparents"""
+		props = self
+		while props is not None:
+			value = props.attrib.get(name)
+			if value is not None:
+				return value
+			props = props.parent
+		return default
+	def get_properties(self, css_version:float) -> dict:
+		"""Produce a dict() of CSS properties to set"""
+		raise NotImplementedError
+
+class BlockStyleProperties(StylePropertiesBase):
+	"""Properties of sections, paragraphs, etc."""
+	def subsumable(self):
+		"""Test whether the blocks attributes may simply be transfered to its parent"""
+		props = self
+		while props is not None:
+			for pattern in ("fo:margin*", "fo:border*"):
+				if len(fnmatch.filter(props.attrib.keys(), pattern)) > 0:
+					return False
+			props = props.parent
+		return True
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		for prop in (
+				"margin", "margin-left", "margin-right", "margin-top", "margin-bottom",
+				"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
+				"border", "border-left", "border-right", "border-top", "border-bottom",
+			):
+			value = self.get_attrib(f"fo:{prop}")
+			if value is not None:
+				if value != "100%":	# don't know what 100% is supposed to mean, but it is poison...
+					properties[prop] = normalize_dimensions(prop, value)
+		return properties
+
+class GraphicStyleProperties(BlockStyleProperties):
+	@property
+	def clear(self):
+		# FIXME: Make sure this is set only when clear will actually be issued below.
+		return self.get_attrib("style:horizontal-pos") in ("left", "right", "from-left")
+
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		if self.get_attrib("style:vertical-rel") == "baseline":
+			pass
+		else:
+			horizontal_pos = self.get_attrib("style:horizontal-pos")
+			if horizontal_pos in ("left", "right"):
+				properties["float"] = horizontal_pos
+				properties["clear"] = horizontal_pos
+			elif horizontal_pos == "from-left":
+				properties["float"] = "left"
+				properties["clear"] = "left"
+			elif horizontal_pos == "center":
+				properties["display"] = "block"
+				properties["margin-left"] = "auto"
+				properties["margin-right"] = "auto"
+		if self.get_attrib("style:mirror") == "horizontal":
+			properties["transform"] = "scaleX(-1)"
+		# Without this, links will get tangled with the links of the parallel paragraph.
+		# Why does not seem to be well-understood.
+		if "float" in properties:
+			properties["position"] = "relative"
+			properties["z-index"] = "1"
+		return properties
+
+class ParagraphStyleProperties(BlockStyleProperties):
+	"""<style:paragraph-properties>"""
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		for prop in ("text-align", "text-indent", "background-color"):
+			value = self.get_attrib(f"fo:{prop}")
+			if value is not None:
+				properties[prop] = value
+
+		line_height = self.get_attrib("fo:line-height")
+		if line_height is not None:
+			# Convert percentage line height to multiplication factor because percentage
+			# line height is inherited differently in ODF and in CSS.
+			m = re.match(r"^(\d+)%$", line_height)
+			if m:
+				line_height = "%.2f" % (int(m.group(1)) / 100.0)
+			properties["line-height"] = line_height
+
+		break_before = self.get_attrib("fo:break-before")
+		if break_before is not None:
+			self.break_before = break_before
+			# Webkit uses non-standard attribute
+			if break_before == "column":
+				properties["-webkit-column-break-before"] = "always"
+
+		border = self.get_attrib("fo:border")
+		if border is not None:
+			properties["border"] = border
+
+		return properties
+
+class SectionStyleProperties(BlockStyleProperties):
+	"""<style:section-properties>"""
+	def init(self, style_el:ET._Element):
+		self.column_count = None
+		self.column_gap = None
+		for child in style_el:
+			if child.tag == "style:columns":
+				self.column_count = child.attrib.get("fo:column-count")
+				self.column_gap = child.attrib.get("fo:column-gap")
+		self.clear = self.column_count is not None or self.column_gap is not None
+
+	def get_properties(self, css_version:float) -> dict:
+		properties = super().get_properties(css_version)
+		for prop, value in (
+				("column-count", self.column_count),
+				("column-gap", self.column_gap)
+				):
+			if value is not None:
+				properties["@media"] = "(min-width:8in)"
+				properties[prop] = value
+				properties["-webkit-%s" % prop] = value
+				properties["-moz-%s" % prop] = value
+		if self.clear:
+			properties["clear"] = "both"		# looks better this way
+		return properties
+
+class TableStyleProperties(BlockStyleProperties):
+	"""<style:table-properties>"""
+	def init(self, style_el:ET._Element):
+		self.clear = dimension2points(self.get_attrib("style:width","0")) > (6.5 * 72.0)
+
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		width = self.get_attrib("style:width")
+		# If the table has a width wide enough to reach the likely margins,
+		# assume the intent was to make it 100% wide.
+		if self.clear:
+			properties["width"] = "100%"
+			properties["clear"] = "both"
+		# Otherwise, use the requested width, but make it the maxiumum
+		# width so that the table can shrink in small displays.
+		else:
+			properties["max-width"] = width
+
+		align = self.get_attrib("table:align")
+		if align is not None:
+			if align == "right":
+				properties["margin-left"] = "auto"
+			elif align == "center":
+				properties["margin-left"] = "auto"
+				properties["margin-right"] = "auto"
+
+		return properties
+
+class TableColumnProperties(BlockStyleProperties):
+	"""<style:table-column-properties>"""
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		column_width = self.get_attrib("style:column-width")
+		if column_width is not None:
+			properties["width"] = column_width
+		return properties
+
+class TableRowProperties(BlockStyleProperties):
+	"""<style:table-row-properties>"""
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		min_row_height = self.get_attrib("style:min-row-height")
+		if min_row_height is not None:
+			properties["height"] = min_row_height
+		return properties
+
+class TableCellProperties(BlockStyleProperties):
+	"""<style:table-cell-properties>"""
+	def init(self, style_el:ET._Element):
+		self.simplified_away = False
+		self.border = None
+
+		# If we are simplifying table cell borders, make all four borders the
+		# same by picking the last one listed which is not "none".
+		#
+		# FIXME: This does not follow the style inheritance chain. As of May 2026
+		# Libreoffice does not use style inheritance in tables.
+		if self.opts.simplify_table_borders:
+			for name, value in list(self.attrib.items()):
+				if name.startswith("fo:border-"):
+					if value != "none":
+						self.border = value
+			assert self.border is not None
+
+			# If simplifying and no vertical align, may be omitted entirely
+			vertical_align = self.get_attrib("style:vertical-align")
+			if vertical_align is None:
+				self.simplified_away = True
+
+	def get_properties(self, css_version:float) -> dict:
+		properties = super().get_properties(css_version)
+		vertical_align = self.get_attrib("style:vertical-align","top")
+		if vertical_align == "middle" or vertical_align == "bottom":
+			properties["vertical-align"] = vertical_align
+		if self.opts.simplify_table_borders:
+			for name, value in list(properties.items()):
+				if name.startswith("border-"):
+					del properties[name]
+			properties["border"] = self.border
+		return properties
+
+class TextStyleProperties(StylePropertiesBase):
+	def get_properties(self, css_version:float) -> dict:
+		properties = {}
+		if self.opts.font_support_level >= 1:
+			font_name = self.get_attrib("style:font-name")
+			if font_name is not None:
+				font_face_declaration = self.fonts[font_name]
+				properties["font-family"] = font_face_declaration.get_css(self.opts.font_support_level)
+
+		# Stash language in CSS object
+		language = self.get_attrib("fo:language")
+		if language is not None:
+			self.language = language
+
+		color = self.get_attrib("fo:color")
+		if color is not None:
+			# Drop black except on spans since we believe it is just noise.
+			#if color != "#000000" or self.family == "text":
+			if color != "#000000":
+				properties["color"] = color
+
+		# Not clear how this is different from background-color in paragraph-properties
+		color = self.get_attrib("fo:background-color")
+		if color is not None:
+			if color != "transparent":
+				properties["background-color"] = color
+
+		for prop in ("font-size", "font-style", "font-weight"):
+			value = self.get_attrib(f"fo:{prop}")
+			if value is not None:
+				properties[prop] = value
+
+		text_position = self.get_attrib("style:text-position")
+		if text_position is not None:
+			m = re.match(r"^((super)|(sub)|(\d+%))( (\d+%))?$", text_position)
+			if not m:
+				raise OdfNotImplementedYet("unrecognized text position: %s" % text_position)
+			vertical_align = m.group(1)
+			font_scale = m.group(6)
+			if font_scale is None:
+				if vertical_align == "super" or vertical_align == "sub":
+					font_scale = "60%"
+			if vertical_align == "0%":
+				self.console.warning("nested text-position not converted correctly", indent=2)
+			else:
+				properties["vertical-align"] = vertical_align
+				if font_scale is not None:
+					properties["font-size"] = font_scale
+
+		underline = self.get_attrib("style:text-underline-style","none")
+		if underline != "none":
+			properties["text-decoration"] = "underline"
+
+		# FIXME: has side effect of canceling underlining
+		line_through = self.get_attrib("style:text-line-through-style","none")
+		if line_through != "none":
+			properties["text-decoration"] = "line-through"
+
+		return properties
+
+class StyleBase:
 	"""Represents an ODF style rule"""
-	def __init__(self, family:str, name:str, parent, template:str):
-		self.family:str = family
-		self.name:str = name			# text:style-name from ODF file
-		self.parent = parent
+	def __init__(self, odt_style:ET._Element, family:str, template:str):
+		self.family = family
+		self.name:str = odt_style.attrib["style:name"]
+		self.parent_name = odt_style.attrib.get("style:parent-style-name")
+		self.parent = None
 		self.template:str = template	# printf()-style template
-		self.properties = {}			# CSS to put inside the curly brackets
-		self.media = None				# media query condition
 		self.used = False				# mentioned in document?
 		self.tag_override = None		# change <p> or <span> to this
 		self.break_before = None		# "page" for page break before
 		self.language = None			# not CSS, but where else can we put this?
-		self.simplified_td = False
-
-		if self.parent is not None:
-			self.properties.update(parent.properties)
-			self.media = parent.media
-			self.break_before = parent.break_before
-			self.language = parent.language
+		self.simplified_away = False
+		self.clear = False
+		self.text_properties = None
+		self.block_properties = None
+		self.graphic_properties = None
 
 		tag_override = {
 			("text", "Emphasis"): "i",			# <em> would also be appropriate
 			("text", "Strong_20_Emphasis"): "b",
 			("paragraph", "Quotations"): "blockquote",
-			}.get((family, name))
+			}.get((self.family, self.name))
 		if tag_override is not None:
 			self.tag_override = tag_override
 			self.template = tag_override.upper() + ".%s"
 
 	def __str__(self):
-		return f"<Style family={repr(self.family)} name={repr(self.name)} template={repr(self.template)}>"
+		return f"<Style family={repr(self.family)} name={repr(self.name)}>"
+
+	def set_parent(self, parent):
+		self.parent = parent
+		self.break_before = parent.break_before
+		self.language = parent.language
 
 	@property
 	def className(self):
@@ -96,10 +381,6 @@ class BaseStyle:
 	def get_template(self):
 		return self.template
 
-	def property_match(self, pattern:str):
-		"""Test whether the style has a properties matching a wildcard expression"""
-		return len(fnmatch.filter(self.properties.keys(), pattern)) > 0
-
 	def is_instance_of(self, class_name:str):
 		style = self
 		while style is not None:
@@ -108,22 +389,12 @@ class BaseStyle:
 			style = style.parent
 		return False
 
-	def get_css(self, css_version:float):
-		"""Return a CSS rule respresenting this style"""
-		style_text = "%s{%s}" % (
-			self.get_template() % self.className,
-			";".join(["%s:%s" % (name, value) for name, value in self.properties.items()])
-			)
-		if self.media is not None and css_version >= 3.0:
-			style_text = "@media %s { %s }" % (
-				self.media,
-				style_text
-				)
-		return style_text
+	def get_css(self, css_version:float) -> str:
+		raise NotImplementedError
 
-class Style(BaseStyle):
-	"""Represents an ODF style rule other than list"""
-	def __init__(self, odt_style:ET._Element, parent:BaseStyle|None, fonts:FontFaces, opts:Odt2HtmlConfig):
+class Style(StyleBase):
+	"""Represents <style:style>, but not <text:list-style>"""
+	def __init__(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
 		assert odt_style.tag == "style:style"
 
 		family = odt_style.attrib["style:family"]
@@ -136,218 +407,86 @@ class Style(BaseStyle):
 			"table-cell": "__AUTO__",
 			"graphic": ".%s",			# <IMG> or <DIV> or <NAV>
 			"section": "DIV.%s",
-
 			"drawing-page": "DIV.%s"
 			}.get(family)
 		if template is None:
 			raise OdfNotImplementedYet(f"Style family {family} not implemented")
 
-		super().__init__(family, odt_style.attrib["style:name"], parent, template)
+		super().__init__(odt_style, family, template)
 
-		self.load_children(odt_style, fonts, opts)
-
-	def load_children(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig):
-		# Process the <style:style>'s child elements.
-		for el in odt_style:
+		for style_child in odt_style:
 			if opts.debug:
 				print("    <%s %s>" % (
-					el.tag,
-					"\n        ".join([f"{name}={repr(value)}" for name, value in el.attrib.items()])
+					style_child.tag,
+					"\n        ".join([f"{name}={repr(value)}" for name, value in style_child.attrib.items()])
 					))
-			if not el.tag.endswith("-properties"):
-				if opts.debug:
-					print("      Unimplemented style child: %s" % el.tag)
-				continue
+			match style_child.tag:
+				case "style:graphic-properties":
+					self.graphic_properties = GraphicStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:paragraph-properties":
+					self.block_properties = ParagraphStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:section-properties":
+					self.block_properties = SectionStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:table-properties":
+					self.block_properties = TableStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:table-column-properties":
+					self.block_properties = TableColumnProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:table-row-properties":
+					self.block_properties = TableRowProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:table-cell-properties":
+					self.block_properties = TableCellProperties(style_child, style_child.attrib, fonts, opts, console)
+				case "style:text-properties":
+					self.text_properties = TextStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+				case _:
+					if opts.debug:
+						print("      Unimplemented style child: %s" % style_child.tag)
 
-			# Convert properties which are generally applicable to block items.
-			for prop in (
-					"margin", "margin-left", "margin-right", "margin-top", "margin-bottom",
-					"padding", "padding-left", "padding-right", "padding-top", "padding-bottom",
-					"border", "border-left", "border-right", "border-top", "border-bottom",
-				):
-				value = el.attrib.get(f"fo:{prop}")
-				if value is not None:
-					if value != "100%":	# don't know what 100% is supposed to mean, but it is poison...
-						self.properties[prop] = normalize_dimensions(prop, value)
-
-			if el.tag == "style:section-properties":
-				for el2 in el:
-					if el2.tag == "style:columns":
-						for prop in ("column-count", "column-gap"):
-							value = el2.attrib.get(f"fo:{prop}")
-							if value is not None:
-								self.media = "(min-width:8in)"
-								self.properties[prop] = value
-								self.properties["-webkit-%s" % prop] = value
-								self.properties["-moz-%s" % prop] = value
-								self.properties["clear"] = "both"		# looks better this way
-
-			# To text blocks
-			elif el.tag == "style:paragraph-properties":
-				for prop in ("text-align", "text-indent", "background-color"):
-					value = el.attrib.get(f"fo:{prop}")
-					if value is not None:
-						self.properties[prop] = value
-
-				line_height = el.attrib.get("fo:line-height")
-				if line_height is not None:
-					# Convert percentage line height to multiplication factor because percentage
-					# line height is inherited differently in ODF and in CSS.
-					m = re.match(r"^(\d+)%$", line_height)
-					if m:
-						line_height = "%.2f" % (int(m.group(1)) / 100.0)
-					self.properties["line-height"] = line_height
-
-				break_before = el.attrib.get("fo:break-before")
-				if break_before is not None:
-					self.break_before = break_before
-					# Webkit uses non-standard attribute
-					if break_before == "column":
-						self.properties["-webkit-column-break-before"] = "always"
-
-				border = el.attrib.get("fo:border")
-				if border is not None:
-					self.properties["border"] = border
-
-			# Text in blocks or inline
-			# ODF 1.3 - 16.29.29
-			elif el.tag == "style:text-properties":
-				if opts.font_support_level >= 1:
-					font_name = el.attrib.get("style:font-name")
-					if font_name is not None:
-						font_face_declaration = fonts[font_name]
-						self.properties["font-family"] = font_face_declaration.get_css(opts.font_support_level)
-
-				# Stash language in CSS object
-				language = el.attrib.get("fo:language")
-				if language is not None:
-					self.language = language
-
-				color = el.attrib.get("fo:color")
-				if color is not None:
-					# Drop black except on spans since we believe it is just noise.
-					if color != "#000000" or self.family == "text":
-						self.properties["color"] = color
-
-				# Not clear how this is different from background-color in paragraph-properties
-				color = el.attrib.get("fo:background-color")
-				if color is not None:
-					if color != "transparent":
-						self.properties["background-color"] = color
-
-				for prop in ("font-size", "font-style", "font-weight"):
-					value = el.attrib.get(f"fo:{prop}")
-					if value is not None:
-						self.properties[prop] = value
-
-				text_position = el.attrib.get("style:text-position")
-				if text_position is not None:
-					m = re.match(r"^((super)|(sub)|(\d+%))( (\d+%))?$", text_position)
-					if not m:
-						raise OdfNotImplementedYet("unrecognized text position: %s" % text_position)
-					vertical_align = m.group(1)
-					font_scale = m.group(6)
-					if font_scale is None:
-						if vertical_align == "super" or vertical_align == "sub":
-							font_scale = "60%"
-					if vertical_align == "0%":
-						print("  Warning: nested text-position in %s not converted correctly" % self.name)
-					else:
-						self.properties["vertical-align"] = vertical_align
-						if font_scale is not None:
-							self.properties["font-size"] = font_scale
-
-				underline = el.attrib.get("style:text-underline-style","none")
-				if underline != "none":
-					self.properties["text-decoration"] = "underline"
-
-				# FIXME: has side effect of canceling underlining
-				line_through = el.attrib.get("style:text-line-through-style","none")
-				if line_through != "none":
-					self.properties["text-decoration"] = "line-through"
-
-			elif el.tag == "style:table-properties":
-				width = el.attrib.get("style:width")
-				# If the table has a width wide enough to reach the likely margins,
-				# assume the intent was to make it 100% wide.
-				if dimension2points(width) > (6.5 * 72.0):
-					self.properties["width"] = "100%"
-					self.properties["clear"] = "both"
-				# Otherwise, use the requested width, but make it the maxiumum
-				# width so that the table can shrink in small displays.
-				else:
-					self.properties["max-width"] = width
-
-				align = el.attrib.get("table:align")
-				if align is not None:
-					if align == "right":
-						self.properties["margin-left"] = "auto"
-					elif align == "center":
-						self.properties["margin-left"] = "auto"
-						self.properties["margin-right"] = "auto"
-
-			elif el.tag == "style:table-column-properties":
-				column_width = el.attrib.get("style:column-width")
-				if column_width is not None:
-					self.properties["width"] = column_width
-
-			elif el.tag == "style:table-row-properties":
-				min_row_height = el.attrib.get("style:min-row-height")
-				if min_row_height is not None:
-					self.properties["height"] = min_row_height
-
-			if el.tag == "style:table-cell-properties":
-				vertical_align = el.attrib.get("style:vertical-align","top")
-				if vertical_align == "middle" or vertical_align == "bottom":
-					self.properties["vertical-align"] = vertical_align
-
-			if el.tag == "style:graphic-properties":
-				if el.attrib.get("style:vertical-rel") == "baseline":
-					pass
-				else:
-					horizontal_pos = el.attrib.get("style:horizontal-pos")
-					if horizontal_pos in ("left", "right"):
-						self.properties["float"] = horizontal_pos
-						self.properties["clear"] = horizontal_pos
-					elif horizontal_pos == "from-left":
-						self.properties["float"] = "left"
-						self.properties["clear"] = "left"
-					elif horizontal_pos == "center":
-						self.properties["display"] = "block"
-						self.properties["margin-left"] = "auto"
-						self.properties["margin-right"] = "auto"
-				if el.attrib.get("style:mirror") == "horizontal":
-					self.properties["transform"] = "scaleX(-1)"
-				# Without this, links will get tangled with the links of the parallel paragraph.
-				# Why does not seem to be well-understood.
-				if "float" in self.properties:
-					self.properties["position"] = "relative"
-					self.properties["z-index"] = "1"
+		# Guarantee the presence of these properties objects in order to preserve the inheritance chain
+		if self.graphic_properties is None:
+			self.graphic_properties = GraphicStyleProperties([], {}, fonts, opts, console)
+		if self.block_properties is None:
+			self.block_properties = BlockStyleProperties([], {}, fonts, opts, console)
+		if self.text_properties is None:
+			self.text_properties = TextStyleProperties([], {}, fonts, opts, console)
 
 		# FIXME: read up on this. Does this attribute really indicate a new page?
 		# NOTE: this will override the break-before in <paragraph-properties>
 		if "style:master-page-name" in odt_style.attrib and odt_style.attrib["style:master-page-name"] != "":
 			self.break_before = "page"
 
-		# If we are simplifying table cell borders, make all four borders the
-		# same by picking the last one listed which is not "none".
-		if self.family == "table-cell" and opts.simplify_table_borders:
-			for name, value in list(self.properties.items()):
-				if name.startswith("border-"):
-					del self.properties[name]
-					if value != "none":
-						self.properties["border"] = value
-			if "vertical-align" not in self.properties:
-				self.simplified_td = True
+	def get_properties(self, css_version:float):
+		properties = {}
+		properties.update(self.graphic_properties.get_properties(css_version))
+		properties.update(self.block_properties.get_properties(css_version))
+		properties.update(self.text_properties.get_properties(css_version))
+		return properties
+
+	def get_css(self, css_version:float) -> str:
+		"""Return a CSS rule representing this style"""
+		properties = self.get_properties(css_version)
+		media = properties.get("@media")
+		if media:
+			del properties["@media"]
+		style_text = "%s{%s}" % (
+			self.get_template() % self.className,
+			";".join(["%s:%s" % (name, value) for name, value in properties.items()])
+			)
+		if media is not None and css_version >= 3.0:
+			style_text = "@media %s { %s }" % (
+				media,
+				style_text
+				)
+		return style_text
 
 class TableCellStyle(Style):
-	def __init__(self, odt_style:ET._Element, parent:BaseStyle|None, fonts:FontFaces, opts:Odt2HtmlConfig):
-		super().__init__(odt_style, parent, fonts, opts)
+	"""Represents <style:style style:family='table-cell'"""
+	def __init__(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
+		super().__init__(odt_style, fonts, opts, console)
 		self.is_th = False
 
 	@property
 	def className(self):
-		if self.simplified_td:
+		if self.simplified_away:
 			# drop the cell part of the name
 			return self.name.split(".")[0].replace("_20_","_")
 		return super().className
@@ -355,7 +494,7 @@ class TableCellStyle(Style):
 	def get_template(self) -> str:
 		if self.template != "__AUTO__":
 			return self.template
-		elif self.simplified_td:
+		elif self.simplified_away:
 			if self.is_th:
 				return "TABLE.%s TH"
 			else:
@@ -366,12 +505,12 @@ class TableCellStyle(Style):
 			else:
 				return "TD.%s"
 
-class ListStyle(BaseStyle):
+class ListStyle(StyleBase):
 	"""Represents an ODF list style rule"""
 	def __init__(self, odt_style:ET._Element):
 		assert odt_style.tag == "text:list-style"
-		name = odt_style.attrib["style:name"]
-		super().__init__("list", name, None, "UL.%s")
+		super().__init__(odt_style, "list", "UL.%s")
+
 		self.levels = []
 		self.ordered = False
 		previous_margin_left = 0.0
@@ -408,7 +547,7 @@ class ListStyle(BaseStyle):
 	def __str__(self):
 		return self.template % self.name + ", ".join(self.levels)
 
-	def get_css(self, css_version):
+	def get_css(self, css_version) -> str:
 		css_text = []
 		css_text.append((self.template % self.name) + " LI{margin-left:0;text-indent:0}")
 		count = 0
@@ -420,15 +559,18 @@ class ListStyle(BaseStyle):
 class Styles(UserDict):
 	"""Container for styles from the ODT document"""
 
-	def __init__(self, opts:Odt2HtmlConfig):
+	def __init__(self, opts:Odt2HtmlConfig, console:Console):
 		super().__init__()
 		self.opts = opts
+		self.console = console
 
 		self.default_language = None	# to set on <HTML> tag
 		self.fonts = FontFaces()
-		self.byname:dict[str,BaseStyle] = {}			# by name from ODT file
-		self.claims:dict[ET._Element,BaseStyle] = {}
-		self.plugin_rules:list[str] = []			# lines we plugins have asked us to add to the stylesheet
+		self.byname:dict[str,StyleBase] = {}			# by name from ODT file
+		self.claims:dict[ET._Element,StyleBase] = {}
+
+		# lines we plugins have asked us to add to the stylesheet
+		self.plugin_rules:list[str] = []
 
 	def load_font_face_decls(self, odt_font_face_decls:ET._Element) -> None:
 		"""<font-face-decls> are passed to this function"""
@@ -440,38 +582,44 @@ class Styles(UserDict):
 	def load_stylesheet(self, odt_stylesheet:ET._Element) -> None:
 		"""Styles tags (of which there are several) are passed to this function"""
 		if self.opts.debug:
-			print("===== Converting ODF Stylesheet =====")
+			#print("===== Converting ODF Stylesheet =====")
+			self.console.banner("Converting ODF Stylesheet", indent=2)
+		for odt_style in odt_stylesheet:
+			if self.opts.debug:
+				print("  <%s %s>" % (
+					odt_style.tag,
+					"\n      ".join([f"{name}={repr(value)}" for name, value in odt_style.attrib.items()])
+					))
+			match odt_style.tag:
+				case "style:default-style":
+					self.on_tag_default_style(odt_style)
+				case "style:style":
+					self.on_tag_style(odt_style)
+				case "text:list-style":
+					self.on_tag_list_style(odt_style)
+				case _:
+					#raise OdfNotImplementedYet(f"style tag: {odt_style.tag}")
+					if self.opts.debug:
+						print(f"    unimplemented style tag: {odt_style.tag}")
 
-		# Make first pass.
-		dependent = []
-		for style in odt_stylesheet:
-			if not self.on_tag(style, pass1=True):
-				if self.opts.debug:
-					print("    deferring loading")
-				dependent.append(style)
-
-		# Make a second pass to convert styles which had unresolved dependencies.
-		for style in dependent:
-			self.on_tag(style, pass1=False)
-
-	def on_tag(self, odt_style:ET._Element, pass1:bool) -> bool:
-		"""Load a style tag and its children. Return true if all dependencies have been met."""
+	def connect_styles(self):
+		"""Call after last call to load_stylesheet() to connect children to parents"""
 		if self.opts.debug:
-			print("  <%s %s>" % (
-				odt_style.tag,
-				"\n      ".join([f"{name}={repr(value)}" for name, value in odt_style.attrib.items()])
-				))
-		if odt_style.tag == "style:default-style":
-			return self.on_tag_default_style(odt_style)
-		if odt_style.tag == "style:style":
-			return self.on_tag_style(odt_style, pass1)
-		if odt_style.tag == "text:list-style":
-			return self.on_tag_list_style(odt_style)
-		if self.opts.debug:
-			print("    unimplemented style tag: %s" % odt_style.tag)
-		return True
+			self.console.banner("Connecting styles to parents", indent=2)
+		for style in self.values():
+			if style.parent_name is not None:
+				try:
+					parent = self[(style.family, style.parent_name)]
+					if self.opts.debug:
+						print(f"  {style} to parent {parent}")
+					style.set_parent(parent)
+				except KeyError:
+					if style.parent_name in ("Header","Footer"):		# FIXME: Why is this missing?
+						self.console.warning(f"\"{style.family}:{style.name}\" has non-existent parent \"{style.parent_name}\"")
+					else:
+						raise OdfInvalid(f"Style \"{style.family}:{style.name}\" has non-existent parent \"{style.parent_name}\"")
 
-	def on_tag_default_style(self, odt_style:ET._Element) -> bool:
+	def on_tag_default_style(self, odt_style:ET._Element) -> None:
 		"""Partial implementation of <style:default-style>"""
 		assert odt_style.tag == "style:default-style"
 
@@ -486,52 +634,37 @@ class Styles(UserDict):
 					self.default_language = el.attrib.get("fo:language")
 					self.default_font_family = el.attrib["style:font-name"]
 
-		return True
-
-	def on_tag_style(self, odt_style:ET._Element, pass1:bool) -> bool:
+	def on_tag_style(self, odt_style:ET._Element) -> None:
 		"""Implementation of <style:style>"""
 		assert odt_style.tag == "style:style"
 		family = odt_style.attrib["style:family"]
 
-		parent_style = None
-		parent_style_name = odt_style.attrib.get("style:parent-style-name")
-		if parent_style_name is not None:
-			parent_style = self.get((family, parent_style_name))
-			if parent_style is None:
-				if pass1:
-					return False
-				else:
-					#raise OdfInvalid("missing parent of: %s %s" % (style.tag, style.attrib))
-					print(f"Warning: style wants parent: {odt_style.tag} {odt_style.attrib}")
-
 		if family == "table-cell":
-			style = TableCellStyle(odt_style, parent_style, self.fonts, self.opts)
+			style = TableCellStyle(odt_style, self.fonts, self.opts, self.console)
 		else:
-			style = Style(odt_style, parent_style, self.fonts, self.opts)
+			style = Style(odt_style, self.fonts, self.opts, self.console)
 
 		if self.opts.debug:
 			print("    CSS: %s" % style.get_css(3.0).replace("\n","\n         "))
 		self[(style.family, style.name)] = style
 		self.byname[style.name] = style
-		return True
 
-	def on_tag_list_style(self, odt_style:ET._Element) -> bool:
+	def on_tag_list_style(self, odt_style:ET._Element) -> None:
 		"""Partial implementation <text:list-style>"""
 		style = ListStyle(odt_style)
 		if self.opts.debug:
 			print("    CSS: %s" % style.get_css(3.0).replace("\n","\n         "))
 		self[("list", style.name)] = style
 		self.byname[style.name] = style
-		return True
 
-	def claim_style(self, odt_el, html_el, style_name:str) -> BaseStyle|None:
+	def claim_style(self, odt_el, html_el, style_name:str) -> StyleBase|None:
 		"""
 		The HTML generator calls this when it emits an element which uses a style.
 		We set the used flag, and the caller gets the style.
 		"""
 		if style_name not in self.byname:
-			#raise OdfInvalid(f"A {odt_el.tag} uses undefined style \"{style_name}\"")
-			print(f"Warning: A {odt_el.tag} uses undefined style \"{style_name}\"")
+			#raise OdfInvalid(f"{odt_el.tag} uses non-existent style \"{style_name}\"")
+			self.console.warning(f"{odt_el.tag} uses non-existent style \"{style_name}\"", indent=2)
 			return None
 		style = self.byname[style_name]
 		style.used = True
@@ -582,8 +715,8 @@ class Styles(UserDict):
 			}
 		""")
 
-	def get_css(self, css_version):
-		"""Return document styles converted to CSS"""
+	def get_css(self, css_version) -> str:
+		"""Return all used document styles converted to CSS"""
 		rules = []
 
 		# TODO: font level 1 should not set family

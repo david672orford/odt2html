@@ -2,6 +2,7 @@ import re
 
 class Linter:
 	def __init__(self, converter):
+		self.console = converter.console
 		self.html_body = converter.html_body
 
 	def warnings_formatting(self):
@@ -27,4 +28,4 @@ class Linter:
 					if el2.tail:
 						text += el2.tail
 				text = text[:50]
-				print("  Direct formatting:", el.tag, classes, text)
+				self.console.message("Direct formatting: ", f"{el.tag} {classes} {text}", color="red")

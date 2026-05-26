@@ -11,6 +11,7 @@ from rcssmin import cssmin
 from rjsmin import jsmin
 
 from odt2html.config import Odt2HtmlConfig
+from odt2html.console import Console
 from odt2html.parser import make_odf_parser
 from odt2html.utils import element_empty, element_extract_text, href_to_html
 from odt2html.exceptions import OdfInvalid, OdfNotSupported, OdfNotImplementedYet, OdfBadFormatting
@@ -27,10 +28,11 @@ from odt2html.graphics import convert_custom_shape, convert_rect, convert_line
 
 class Odt2Html:
 	"""This does the actual conversion from ODT to HTML"""
-	def __init__(self, odt_filename:str, output_filename:str, opts:Odt2HtmlConfig|None=None):
+	def __init__(self, odt_filename:str, output_filename:str, opts:Odt2HtmlConfig|None=None, console:Console|None=None):
 		self.odt_filename:str = odt_filename
 		self.output_filename:str = output_filename
 		self.opts:Odt2HtmlConfig = opts if opts else Odt2HtmlConfig()
+		self.console = console if console else Console()
 
 		self.output_dirname:str = os.path.dirname(output_filename)
 		if self.output_dirname == "":
@@ -111,10 +113,9 @@ class Odt2Html:
 		self.odt = zipfile.ZipFile(self.odt_filename)
 
 		if self.opts.debug:
-			print("===== ODT Zip File Contents =====")
+			self.console.banner("ODT Zip File Contents", indent=2)
 			for resource_filename in self.odt.namelist():
 				print("  %s" % resource_filename)
-			print()
 
 		self.odf_parser = make_odf_parser()
 
@@ -146,7 +147,7 @@ class Odt2Html:
 		"""Load styles from styles.xml and content.xml"""
 
 		# Container for styles
-		styles = Styles(self.opts)
+		styles = Styles(self.opts, self.console)
 
 		# Load the font definitions from styles.xml and content.xml
 		for font_face_decls in (
@@ -170,6 +171,8 @@ class Odt2Html:
 				self.content_xml.xpath("/office:document-content/office:automatic-styles")[0]
 				):
 			styles.load_stylesheet(stylesheet)
+
+		styles.connect_styles()
 
 		return styles
 
@@ -311,15 +314,13 @@ class Odt2Html:
 		# Block elements
 		elif odt_el.tag == "text:h":
 			if self.opts.debug:
-				print("=" * 75)
-				print(f" Heading \"{style_name.replace("_20_"," ")}\": {repr(element_extract_text(odt_el))}")
-				print("=" * 75)
+				self.console.banner(f" Heading \"{style_name.replace("_20_"," ")}\": {repr(element_extract_text(odt_el))}")
 			level = int(odt_el.attrib["text:outline-level"])
 			html_el = E("h%d" % level)
 			if level == 1:	# level 1 headings have ID's
 
 				if style_name and style_name.startswith("P"):
-					print("  Warning: level 1 heading with paragraph style: %s" % style_name)
+					self.console.warning("level 1 heading with paragraph style: %s" % style_name, indent=2)
 
 				bookmarks = odt_el.xpath("./text:bookmark-start")
 				if len(bookmarks) > 0:
@@ -508,7 +509,7 @@ class Odt2Html:
 		else:
 			if self.opts.error_unimplemented_tags:
 				raise OdfNotImplementedYet("unimplemented tag: %s" % odt_el.tag)
-			print("  Warning: unimplemented tag: %s" % odt_el.tag)
+			self.console.warning("unimplemented tag: %s" % odt_el.tag, indent=2)
 			html_el = E.span()
 
 		# If we converted the ODF element to an HTML element
@@ -523,11 +524,9 @@ class Odt2Html:
 			if style_name is not None:
 				style = self.styles.claim_style(odt_el, html_el, style_name)
 				if style is not None:
-					if not style.simplified_td:
-						if "class" in html_el.attrib:
-							html_el.attrib["class"] += (" " + style.className)
-						else:
-							html_el.attrib["class"] = style.className
+					if not style.simplified_away:
+						className = html_el.attrib.get("class")
+						html_el.attrib["class"] = (className + " " if className is not None else "") + style.className
 					if style.language is not None:
 						html_el.attrib["lang"] = style.language
 					if style.tag_override is not None:
@@ -675,7 +674,7 @@ class Odt2Html:
 	def convert_frame(self, odt_frame:ET._Element) -> ET._Element:
 		assert odt_frame.tag == "draw:frame"
 		if self.opts.debug:
-			print(f"Frame: {repr(odt_frame.attrib)}")
+			print(f"  Frame: {repr(odt_frame.attrib)}")
 
 		# If the frame is just a container for a single image,
 		odt_images = odt_frame.xpath("./draw:image")
@@ -692,7 +691,7 @@ class Odt2Html:
 			elif " " in (alt := odt_frame.attrib.get("draw:name","")):
 				html_el.attrib["alt"] = alt
 			else:
-				print("  Warning: image without alt text")
+				self.console.warning("image without alt text", indent=2)
 
 		# If the frame is an actual frame,
 		else:
@@ -759,7 +758,7 @@ class Odt2Html:
 		# If "clear: both" is set in the table's style (which it will be for full-width tables),
 		# copy it into the style of the wrapper. If the previous element is a heading, copy it into
 		# the heading's style as well.
-		if self.styles.claims[html_el].properties.get("clear","") == "both":
+		if self.styles.claims[html_el].clear:
 			restraint.attrib["style"] = "clear: both"
 			if len(html_parent_el) >= 1:
 				prev_el = html_parent_el[-1]
@@ -781,7 +780,8 @@ class Odt2Html:
 		if len(td) == 1 and td[0].tag == "p":
 			p = td[0]
 			p_style = self.styles.claims[p]
-			if not p_style.property_match("margin*") and not p_style.property_match("border"):
+			#if not p_style.block_attrib_match("fo:margin*") and not p_style.block_attrib_match("fo:border*"):
+			if p_style.block_properties.subsumable():
 				classes = []
 				if "class" in td.attrib:
 					classes.append(td.attrib["class"])

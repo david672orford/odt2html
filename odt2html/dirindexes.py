@@ -13,23 +13,23 @@ import lxml.html
 
 class Odt2HtmlDirectoryIndexes(list):
 	def find_entry(self, search_filename:str):
-		# Search the indexes specified with --docdir= options looking for
+		# Search the indexes specified with --docindex= options looking for
 		# a link to the specified document
-		for docdir in self:
-			#print(" docdir.dirname:", docdir.dirname)
+		for docindex in self:
+			#print(" docindex.dirname:", docindex.dirname)
 			#print(" search_filename:", search_filename)
-			if docdir.dirname != "":
-				if search_filename.startswith(docdir.dirname):
-					search_filename = search_filename[len(docdir.dirname):]
+			if docindex.dirname != "":
+				if search_filename.startswith(docindex.dirname):
+					search_filename = search_filename[len(docindex.dirname):]
 				else:		# FIXME: this is a hack
 					search_filename = "../" + search_filename
-			if search_filename in docdir:
-				return docdir[search_filename]
+			if search_filename in docindex:
+				return docindex[search_filename]
 		return None
 
 class Odt2HtmlDirectoryIndex(dict):
 	def __init__(self, filename:str):
-		self.filename:str = filename	# HTML file from which this docdir was loaded
+		self.filename:str = filename	# HTML file from which this docindex was loaded
 		self.site_name = None			# FIXME: loaded, but unused
 		self.site_url = None			# FIXME: loaded, but unused
 		self.publisher = None
@@ -43,10 +43,10 @@ class Odt2HtmlDirectoryIndex(dict):
 			self.dirname = ""
 
 		with open(filename) as fh:
-			docdir = lxml.html.parse(fh)
+			docindex = lxml.html.parse(fh)
 
-		# Collect information about the docdir entry for each listed document.
-		for section in docdir.xpath("//section"):
+		# Collect information about the docindex entry for each listed document.
+		for section in docindex.xpath("//section"):
 			section_id = section.attrib.get("id")
 			h2s = section.xpath("./h2")
 
@@ -61,8 +61,8 @@ class Odt2HtmlDirectoryIndex(dict):
 					filename = unquote(href)
 					self[filename] = Odt2HtmlArticle(self, section_id, section_heading, anchor.text_content().strip())
 
-		# Collect site metadata from the docdir itself.
-		for script in docdir.xpath("//script[@type='application/ld+json']"):
+		# Collect site metadata from the docindex itself.
+		for script in docindex.xpath("//script[@type='application/ld+json']"):
 			data = json.loads(script.text)
 			for item in data if type(data) is list else (data,):
 
@@ -87,17 +87,17 @@ class Odt2HtmlDirectoryIndex(dict):
 						self.site_url += "/"
 					continue
 
-				# Unless an docdir page is the top page of the site it should have breadcrumbs
+				# Unless an docindex page is the top page of the site it should have breadcrumbs
 				# to show where it is in the site. Save them so that we can propagate them
-				# to the docdired document.
+				# to the docindexed document.
 				if item["@type"] == "BreadcrumbList":
 					self.breadcrumblist = item["itemListElement"]
 
 		if self.site_name is None and len(self.breadcrumblist) == 0:
-			print("Warning: docdir \"%s\" lacks Schema.org metadata" % self.filename)
+			print("Warning: docindex \"%s\" lacks Schema.org metadata" % self.filename)
 
 	def __str__(self):
-		return "<Odt2HtmlDocdir filename=\"%s\", %d entries>" % (self.filename, len(self.keys()))
+		return "<Odt2Htmldocindex filename=\"%s\", %d entries>" % (self.filename, len(self.keys()))
 
 class Odt2HtmlArticle:
 	def __init__(self, dirindex:Odt2HtmlDirectoryIndex, section_id, section_heading, linked_text:str):
@@ -109,4 +109,4 @@ class Odt2HtmlArticle:
 		else:
 			self.title = linked_text
 	def __str__(self):
-		return "<Odt2HtmlDocdirArticle title=\"%s\">" % self.title
+		return "<Odt2HtmldocindexArticle title=\"%s\">" % self.title

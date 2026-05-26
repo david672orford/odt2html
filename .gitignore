@@ -1,4 +1,5 @@
 __pycache__
 *.pyc
 epubcheck-3.0.1
+tests
 tests/test_*.html

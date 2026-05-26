@@ -19,7 +19,7 @@ class WrappedTables:
 
 	def run(self):
 		if self.debug:
-			print("Fixing up wrappable tables...")
+			print("  Fixing up wrappable tables...")
 		count = 0
 		for table in self.html_body.xpath(".//table[contains(@class, 'Wrap')]"):
 			if self.debug:
@@ -29,8 +29,9 @@ class WrappedTables:
 			table.tag = "div"
 			table_style = self.styles.claims[table]
 			table_style.template = "DIV.%s"
-			if "max-width" in table_style.properties:
-				del table_style.properties["max-width"]
+			# TODO: Convert to new style system
+			#if "max-width" in table_style.properties:
+			#	del table_style.properties["max-width"]
 
 			boxes = []
 			for tchild in table:
@@ -46,12 +47,13 @@ class WrappedTables:
 							style = self.styles.claims.get(td)
 							if style is not None and style.template != "DIV.%s":
 								style.template = "DIV.%s"
-								vertical_align = style.properties.pop("vertical-align",None)
-								style.properties["justify-content"] = {
-									"top":"flex-start",
-									"middle":"center",
-									"bottom":"flex-end",
-									}.get(vertical_align,"center")
+								# TODO: Translate to new style system
+								#vertical_align = style.properties.pop("vertical-align",None)
+								#style.properties["justify-content"] = {
+								#	"top":"flex-start",
+								#	"middle":"center",
+								#	"bottom":"flex-end",
+								#	}.get(vertical_align,"center")
 							boxes.append(td)
 
 				elif tchild.tag == "col":

@@ -4,6 +4,7 @@ import sys
 import os
 import argparse
 
+from odt2html.console import Console
 from odt2html.converter import Odt2Html
 from odt2html.exceptions import OdfException
 from odt2html.config import Odt2HtmlConfig
@@ -69,12 +70,14 @@ def main() -> int:
 	_=parser.add_argument("filenames", nargs="+", help="List of files to process")
 	opts = parser.parse_args(namespace=Opts())
 
+	console = Console()
+
 	count_total = 0
 	count_built = 0
 	count_rebuilt = 0
 	for filename in opts.filenames:
 		if opts.verbose:
-			print(u"\"%s\"" % filename)
+			console.banner(filename, color="blue")
 
 		if not os.path.exists(filename):
 			sys.stderr.write(f"File does not exist: {filename}\n")
@@ -95,12 +98,12 @@ def main() -> int:
 		build = False
 		if not os.path.exists(output_filename):
 			if opts.verbose:
-				print("  building...")
+				print("  Building...")
 			count_built += 1
 			build = True
 		elif opts.debug or opts.force or os.path.getmtime(output_filename) < filename_mtime:
 			if opts.verbose:
-				print("  rebuilding...")
+				print("  Rebuilding...")
 			count_rebuilt += 1
 			build = True
 
@@ -114,21 +117,26 @@ def main() -> int:
 
 			# Perform the conversion
 			try:
-				_=Odt2Html(filename, output_filename, opts)
+				_=Odt2Html(filename, output_filename, opts, console)
 			except OdfException as e:
-				if opts.debug:
-					print(f"Failure converting {filename}")
-					raise
-				sys.stderr.write(f"Conversion failed: {e.__doc__}: {str(e)}\n")
+				console.message("Conversion failed: ", f"{e.__doc__}: {str(e)}", color="red", file=sys.stderr)
 				if not opts.debug:
-					print("Rerun with --debug for a stack trace.")
+					print("Rerun with --debug for a stack trace.", file=sys.stderr)
 				return 1
 
 			# Make the creation time of the HTML file one millisecond after the
 			# creation time of the ODT file from which it was made.
 			os.utime(output_filename, (filename_mtime + 0.01, filename_mtime + 0.01))
-		elif opts.verbose:
-			print("  up-to-date")
 
+			percent_compression = int((1.0 - (os.path.getsize(output_filename) / os.path.getsize(filename))) * 100 + 0.5)
+			if percent_compression >= 0:
+				message = f"{percent_compression}% size reduction"
+			else:
+				message = f"{-percent_compression}% size increase"
+			console.message("Done: ", message, indent=2, color="green")
+		elif opts.verbose:
+			console.message("up-to-date", "", indent=2, color="green")
+
+	print()
 	print("Built %d and rebuilt %d of %d files." % (count_built, count_rebuilt, count_total))
 	return 0

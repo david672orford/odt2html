@@ -14,6 +14,7 @@ class HyperlinkConverter:
 	def __init__(self, converter):
 		# Things this code still needs from the converter object now that
 		# it has been partially encapsulated
+		self.console = converter.console
 		self.odt_filename = converter.odt_filename
 		self.output_dirname = converter.output_dirname
 		self.opts = converter.opts
@@ -62,9 +63,9 @@ class HyperlinkConverter:
 			else:
 				# Make sure target file (likely an ODT or HTML file) exists
 				fs_path = os.path.join(os.path.dirname(self.odt_filename), url2pathname(href[3:]))
-				fs_path = fs_path.encode("utf-8")	# FIXME: assumes file system encoding is UTF-8
-				if not os.path.exists(fs_path):
-					print("  Warning: broken link: %s" % fs_path)
+				# FIXME: assumes file system encoding is UTF-8
+				if not os.path.exists(fs_path.encode("utf-8")):
+					self.console.warning("broken link: \"%s\"" % fs_path, indent=2)
 				# Whether it exists or not, point to the HTML version
 				href = href_html[3:]
 		elif href.startswith("#zoom_image"):
