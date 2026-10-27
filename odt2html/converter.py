@@ -468,14 +468,17 @@ class Odt2Html:
 		elif odt_el.tag == "text:user-defined":
 			html_el = E.span({"class":"user-defined"})	# class is not used
 		elif odt_el.tag == "text:variable-decls":
-			html_el = None	# drop children too
+			html_el = None	# drop children
 		elif odt_el.tag == "text:variable-set":
 			html_el = E._dropme({"odt_tag":odt_el.tag})
 
 		# User note
 		elif odt_el.tag == "office:annotation":
-			html_el = None
+			html_el = E._dropme({"odt_tag":odt_el.tag, "with_children":"true"})
 		elif odt_el.tag == "office:annotation-end":
+			html_el = E._dropme({"odt_tag":odt_el.tag})
+		elif odt_el.tag.startswith("dc:"):
+			assert html_parent_el is not None and html_parent_el.tag == "_dropme"
 			html_el = None
 
 		# Forms not really implemented. All we do is draw a box for each control.
@@ -561,8 +564,8 @@ class Odt2Html:
 				if self.opts.debug:
 					print("Dropping %s" % html_el.attrib["odt_tag"])
 				assert html_parent_el is not None
-				if len(html_el) > 0:
-					raise OdfInvalid("<%s> tag not empty" % html_el.attrib["odt_tag"])
+				if len(html_el) > 0 and html_el.attrib.get("with_children","false") == "false":
+					raise OdfInvalid("<%s> dropt tag not empty" % html_el.attrib["odt_tag"])
 				text = ""
 				if html_el.text is not None:
 					text += html_el.text
@@ -780,8 +783,7 @@ class Odt2Html:
 		if len(td) == 1 and td[0].tag == "p":
 			p = td[0]
 			p_style = self.styles.claims[p]
-			#if not p_style.block_attrib_match("fo:margin*") and not p_style.block_attrib_match("fo:border*"):
-			if p_style.block_properties.subsumable():
+			if p_style.block_properties.is_subsumable():
 				classes = []
 				if "class" in td.attrib:
 					classes.append(td.attrib["class"])
@@ -797,12 +799,14 @@ class Odt2Html:
 				td.remove(p)
 				if td.text is None or len(td.text) < 25:		# unwrap short <td>'s
 					td.tail = ""
+
 				# FIXME: Shouldn't this work even if there are multiple paragraphs in the <td>?
-				if p_style.is_instance_of("Table_20_Heading"):
-					td.tag = "th"
-					style = self.styles.claims[td]
-					assert isinstance(style, TableCellStyle)
-					style.is_th = True
+				# FIXME: This doesn't work properly because a <th> and a <td> may share the same style.
+				#if p_style.is_instance_of("Table_20_Heading"):
+				#	td.tag = "th"
+				#	style = self.styles.claims[td]
+				#	assert isinstance(style, TableCellStyle)
+				#	style.is_th = True
 
 	#------------------------------------------------------------------
 	# Pass 3

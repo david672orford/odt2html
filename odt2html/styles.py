@@ -6,6 +6,7 @@ import re
 import fnmatch
 import textwrap
 from collections import UserDict
+from typing import ClassVar
 
 import lxml.etree as ET
 
@@ -25,7 +26,7 @@ class FontFace:
 		self.font_pitch = font_face.attrib.get("style:font-pitch")
 
 	# Generic font family names in ODF are different from those in CSS!
-	font_family_map = {
+	font_family_map: ClassVar[dict[str, str]] = {
 		"roman": "serif",
 		"swiss": "sans-serif",
 		"modern": "monospace",
@@ -59,10 +60,11 @@ class FontFace:
 		return ",".join(font_families)
 
 class FontFaces(UserDict):
-	"""Font face lookup"""
+	"""Container for the FontFace objects"""
 
 class StylePropertiesBase:
-	"""Base class for <style:*-properites>"""
+	"""Base class for the representations of <style:*-properties> tags"""
+
 	def __init__(self, style_el:ET._Element, attrib:dict, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
 		self.attrib = attrib
 		self.fonts = fonts
@@ -70,8 +72,10 @@ class StylePropertiesBase:
 		self.console = console
 		self.parent = None
 		self.init(style_el)
+
 	def init(self, style_el:ET._Element):
 		pass
+
 	def get_attrib(self, name:str, default:str|None=None):
 		"""Retrieve a style attribute extending the search to parents and grandparents"""
 		props = self
@@ -81,14 +85,19 @@ class StylePropertiesBase:
 				return value
 			props = props.parent
 		return default
+
 	def get_properties(self, css_version:float) -> dict:
 		"""Produce a dict() of CSS properties to set"""
 		raise NotImplementedError
 
 class BlockStyleProperties(StylePropertiesBase):
-	"""Properties of sections, paragraphs, etc."""
-	def subsumable(self):
-		"""Test whether the blocks attributes may simply be transfered to its parent"""
+	"""Style properties of sections, paragraphs, etc."""
+
+	def is_subsumable(self) -> bool:
+		"""
+		Test whether the block's attributes may simply be transfered to its parent.
+		Used when a <td> contains a single <p>.
+		"""
 		props = self
 		while props is not None:
 			for pattern in ("fo:margin*", "fo:border*"):
@@ -96,6 +105,7 @@ class BlockStyleProperties(StylePropertiesBase):
 					return False
 			props = props.parent
 		return True
+
 	def get_properties(self, css_version:float) -> dict:
 		properties = {}
 		for prop in (
@@ -104,19 +114,20 @@ class BlockStyleProperties(StylePropertiesBase):
 				"border", "border-left", "border-right", "border-top", "border-bottom",
 			):
 			value = self.get_attrib(f"fo:{prop}")
-			if value is not None:
-				if value != "100%":	# don't know what 100% is supposed to mean, but it is poison...
-					properties[prop] = normalize_dimensions(prop, value)
+			if value is not None and value != "100%":	# don't know what 100% is supposed to mean, but it is poison...
+				properties[prop] = normalize_dimensions(prop, value)
 		return properties
 
 class GraphicStyleProperties(BlockStyleProperties):
+	"""Representation of a <style:graphic-properties> tag"""
+
 	@property
 	def clear(self):
 		# FIXME: Make sure this is set only when clear will actually be issued below.
 		return self.get_attrib("style:horizontal-pos") in ("left", "right", "from-left")
 
 	def get_properties(self, css_version:float) -> dict:
-		properties = {}
+		properties = super().get_properties(css_version)
 		if self.get_attrib("style:vertical-rel") == "baseline":
 			pass
 		else:
@@ -141,10 +152,20 @@ class GraphicStyleProperties(BlockStyleProperties):
 		return properties
 
 class ParagraphStyleProperties(BlockStyleProperties):
-	"""<style:paragraph-properties>"""
+	"""Representation of a <style:paragraph-properties>"""
+
 	def get_properties(self, css_version:float) -> dict:
-		properties = {}
-		for prop in ("text-align", "text-indent", "background-color"):
+		properties = super().get_properties(css_version)
+
+		color = self.get_attrib("fo:background-color")
+		if color is not None and color != "transparent":
+			properties["background-color"] = color
+
+		border = self.get_attrib("fo:border")
+		if border is not None:
+			properties["border"] = border
+
+		for prop in ("text-align", "text-indent"):
 			value = self.get_attrib(f"fo:{prop}")
 			if value is not None:
 				properties[prop] = value
@@ -165,14 +186,11 @@ class ParagraphStyleProperties(BlockStyleProperties):
 			if break_before == "column":
 				properties["-webkit-column-break-before"] = "always"
 
-		border = self.get_attrib("fo:border")
-		if border is not None:
-			properties["border"] = border
-
 		return properties
 
 class SectionStyleProperties(BlockStyleProperties):
-	"""<style:section-properties>"""
+	"""Representation of a <style:section-properties> tag"""
+
 	def init(self, style_el:ET._Element):
 		self.column_count = None
 		self.column_gap = None
@@ -191,19 +209,21 @@ class SectionStyleProperties(BlockStyleProperties):
 			if value is not None:
 				properties["@media"] = "(min-width:8in)"
 				properties[prop] = value
-				properties["-webkit-%s" % prop] = value
-				properties["-moz-%s" % prop] = value
+				properties[f"-webkit-{prop}"] = value
+				properties[f"-moz-{prop}"] = value
 		if self.clear:
 			properties["clear"] = "both"		# looks better this way
 		return properties
 
 class TableStyleProperties(BlockStyleProperties):
-	"""<style:table-properties>"""
+	"""Representation of a <style:table-properties> tag"""
+
 	def init(self, style_el:ET._Element):
 		self.clear = dimension2points(self.get_attrib("style:width","0")) > (6.5 * 72.0)
 
 	def get_properties(self, css_version:float) -> dict:
-		properties = {}
+		properties = super().get_properties(css_version)
+
 		width = self.get_attrib("style:width")
 		# If the table has a width wide enough to reach the likely margins,
 		# assume the intent was to make it 100% wide.
@@ -226,25 +246,27 @@ class TableStyleProperties(BlockStyleProperties):
 		return properties
 
 class TableColumnProperties(BlockStyleProperties):
-	"""<style:table-column-properties>"""
+	"""Representation of a <style:table-column-properties> tag"""
+
 	def get_properties(self, css_version:float) -> dict:
-		properties = {}
+		properties = super().get_properties(css_version)
 		column_width = self.get_attrib("style:column-width")
 		if column_width is not None:
 			properties["width"] = column_width
 		return properties
 
 class TableRowProperties(BlockStyleProperties):
-	"""<style:table-row-properties>"""
+	"""Representation of a <style:table-row-properties> tag"""
 	def get_properties(self, css_version:float) -> dict:
-		properties = {}
+		properties = super().get_properties(css_version)
 		min_row_height = self.get_attrib("style:min-row-height")
 		if min_row_height is not None:
 			properties["height"] = min_row_height
 		return properties
 
 class TableCellProperties(BlockStyleProperties):
-	"""<style:table-cell-properties>"""
+	"""Representation of a <style:table-cell-properties> tag"""
+
 	def init(self, style_el:ET._Element):
 		self.simplified_away = False
 		self.border = None
@@ -256,9 +278,8 @@ class TableCellProperties(BlockStyleProperties):
 		# Libreoffice does not use style inheritance in tables.
 		if self.opts.simplify_table_borders:
 			for name, value in list(self.attrib.items()):
-				if name.startswith("fo:border-"):
-					if value != "none":
-						self.border = value
+				if name.startswith("fo:border-") and value != "none":
+					self.border = value
 			assert self.border is not None
 
 			# If simplifying and no vertical align, may be omitted entirely
@@ -279,13 +300,23 @@ class TableCellProperties(BlockStyleProperties):
 		return properties
 
 class TextStyleProperties(StylePropertiesBase):
+	"""Representation of a <style:text-properties> tag"""
+
 	def get_properties(self, css_version:float) -> dict:
 		properties = {}
+
 		if self.opts.font_support_level >= 1:
+			# TODO: How is style:font-name different from fo:font-family?
+			# In ODT files we have examined, both are present with identical values.
 			font_name = self.get_attrib("style:font-name")
 			if font_name is not None:
 				font_face_declaration = self.fonts[font_name]
 				properties["font-family"] = font_face_declaration.get_css(self.opts.font_support_level)
+
+		for prop in ("font-size", "font-style", "font-weight"):
+			value = self.get_attrib(f"fo:{prop}")
+			if value is not None:
+				properties[prop] = value
 
 		# Stash language in CSS object
 		language = self.get_attrib("fo:language")
@@ -293,33 +324,23 @@ class TextStyleProperties(StylePropertiesBase):
 			self.language = language
 
 		color = self.get_attrib("fo:color")
-		if color is not None:
-			# Drop black except on spans since we believe it is just noise.
-			#if color != "#000000" or self.family == "text":
-			if color != "#000000":
-				properties["color"] = color
+		if color is not None and color != "#000000":	# block seems to be noise
+			properties["color"] = color
 
 		# Not clear how this is different from background-color in paragraph-properties
 		color = self.get_attrib("fo:background-color")
-		if color is not None:
-			if color != "transparent":
-				properties["background-color"] = color
-
-		for prop in ("font-size", "font-style", "font-weight"):
-			value = self.get_attrib(f"fo:{prop}")
-			if value is not None:
-				properties[prop] = value
+		if color is not None and color != "transparent":
+			properties["background-color"] = color
 
 		text_position = self.get_attrib("style:text-position")
 		if text_position is not None:
 			m = re.match(r"^((super)|(sub)|(\d+%))( (\d+%))?$", text_position)
 			if not m:
-				raise OdfNotImplementedYet("unrecognized text position: %s" % text_position)
+				raise OdfNotImplementedYet(f"unrecognized text position: {text_position}")
 			vertical_align = m.group(1)
 			font_scale = m.group(6)
-			if font_scale is None:
-				if vertical_align == "super" or vertical_align == "sub":
-					font_scale = "60%"
+			if font_scale is None and (vertical_align == "super" or vertical_align == "sub"):
+				font_scale = "60%"
 			if vertical_align == "0%":
 				self.console.warning("nested text-position not converted correctly", indent=2)
 			else:
@@ -339,7 +360,8 @@ class TextStyleProperties(StylePropertiesBase):
 		return properties
 
 class StyleBase:
-	"""Represents an ODF style rule"""
+	"""Base class for representing ODF style rules"""
+
 	def __init__(self, odt_style:ET._Element, family:str, template:str):
 		self.family = family
 		self.name:str = odt_style.attrib["style:name"]
@@ -352,9 +374,9 @@ class StyleBase:
 		self.language = None			# not CSS, but where else can we put this?
 		self.simplified_away = False
 		self.clear = False
-		self.text_properties = None
-		self.block_properties = None
-		self.graphic_properties = None
+		self.graphic_properties:GraphicStyleProperties|None = None
+		self.block_properties:BlockStyleProperties|None = None
+		self.text_properties:TextStyleProperties|None = None
 
 		tag_override = {
 			("text", "Emphasis"): "i",			# <em> would also be appropriate
@@ -369,7 +391,11 @@ class StyleBase:
 		return f"<Style family={repr(self.family)} name={repr(self.name)}>"
 
 	def set_parent(self, parent):
+		"""Called late once all styles are loaded to connect to parent style object"""
 		self.parent = parent
+		self.graphic_properties.parent = parent.graphic_properties
+		self.block_properties.parent = parent.block_properties
+		self.text_properties.parent = parent.text_properties
 		self.break_before = parent.break_before
 		self.language = parent.language
 
@@ -394,6 +420,7 @@ class StyleBase:
 
 class Style(StyleBase):
 	"""Represents <style:style>, but not <text:list-style>"""
+
 	def __init__(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
 		assert odt_style.tag == "style:style"
 
@@ -414,47 +441,44 @@ class Style(StyleBase):
 
 		super().__init__(odt_style, family, template)
 
+		graphic_properties = block_properties = text_properties = None
 		for style_child in odt_style:
 			if opts.debug:
-				print("    <%s %s>" % (
-					style_child.tag,
-					"\n        ".join([f"{name}={repr(value)}" for name, value in style_child.attrib.items()])
+				print("    <{tag} {attribs}>".format(
+					tag = style_child.tag,
+					attribs = "\n        ".join([f"{name}={repr(value)}" for name, value in style_child.attrib.items()])
 					))
 			match style_child.tag:
 				case "style:graphic-properties":
-					self.graphic_properties = GraphicStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+					graphic_properties = GraphicStyleProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:paragraph-properties":
-					self.block_properties = ParagraphStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = ParagraphStyleProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:section-properties":
-					self.block_properties = SectionStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = SectionStyleProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:table-properties":
-					self.block_properties = TableStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = TableStyleProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:table-column-properties":
-					self.block_properties = TableColumnProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = TableColumnProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:table-row-properties":
-					self.block_properties = TableRowProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = TableRowProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:table-cell-properties":
-					self.block_properties = TableCellProperties(style_child, style_child.attrib, fonts, opts, console)
+					block_properties = TableCellProperties(style_child, style_child.attrib, fonts, opts, console)
 				case "style:text-properties":
-					self.text_properties = TextStyleProperties(style_child, style_child.attrib, fonts, opts, console)
+					text_properties = TextStyleProperties(style_child, style_child.attrib, fonts, opts, console)
 				case _:
 					if opts.debug:
-						print("      Unimplemented style child: %s" % style_child.tag)
+						print(f"      Unimplemented style child: {style_child.tag}")
 
-		# Guarantee the presence of these properties objects in order to preserve the inheritance chain
-		if self.graphic_properties is None:
-			self.graphic_properties = GraphicStyleProperties([], {}, fonts, opts, console)
-		if self.block_properties is None:
-			self.block_properties = BlockStyleProperties([], {}, fonts, opts, console)
-		if self.text_properties is None:
-			self.text_properties = TextStyleProperties([], {}, fonts, opts, console)
+		self.graphic_properties = graphic_properties or GraphicStyleProperties([], {}, fonts, opts, console)
+		self.block_properties = block_properties or BlockStyleProperties([], {}, fonts, opts, console)
+		self.text_properties = text_properties or TextStyleProperties([], {}, fonts, opts, console)
 
 		# FIXME: read up on this. Does this attribute really indicate a new page?
 		# NOTE: this will override the break-before in <paragraph-properties>
 		if "style:master-page-name" in odt_style.attrib and odt_style.attrib["style:master-page-name"] != "":
 			self.break_before = "page"
 
-	def get_properties(self, css_version:float):
+	def get_properties(self, css_version:float) -> dict:
 		properties = {}
 		properties.update(self.graphic_properties.get_properties(css_version))
 		properties.update(self.block_properties.get_properties(css_version))
@@ -480,12 +504,13 @@ class Style(StyleBase):
 
 class TableCellStyle(Style):
 	"""Represents <style:style style:family='table-cell'"""
+
 	def __init__(self, odt_style:ET._Element, fonts:FontFaces, opts:Odt2HtmlConfig, console:Console):
 		super().__init__(odt_style, fonts, opts, console)
 		self.is_th = False
 
 	@property
-	def className(self):
+	def className(self) -> str:
 		if self.simplified_away:
 			# drop the cell part of the name
 			return self.name.split(".")[0].replace("_20_","_")
@@ -507,6 +532,7 @@ class TableCellStyle(Style):
 
 class ListStyle(StyleBase):
 	"""Represents an ODF list style rule"""
+
 	def __init__(self, odt_style:ET._Element):
 		assert odt_style.tag == "text:list-style"
 		super().__init__(odt_style, "list", "UL.%s")
@@ -521,7 +547,7 @@ class ListStyle(StyleBase):
 				self.template = "OL.%s"
 				self.ordered = True
 			else:
-				raise OdfNotImplementedYet("Unsupported list-style element: %s" % el.tag)
+				raise OdfNotImplementedYet(f"Unsupported list-style element: {el.tag}")
 
 			level = int(el.attrib["text:level"])
 			for el2 in el:
@@ -538,13 +564,13 @@ class ListStyle(StyleBase):
 						previous_margin_left += 18
 					break
 			else:
-				OdfInvalid("list-style %s has not list-level-properties" % self.name)
+				OdfInvalid(f"list-style {self.name} has not list-level-properties")
 
-	def add_level(self, level:int, indentation):
+	def add_level(self, level:int, indentation) -> None:
 		self.levels.append(indentation)
-		assert len(self.levels) == level, "Incorrect levels in list style %s" % self.name
+		assert len(self.levels) == level, f"Incorrect levels in list style {self.name}"
 
-	def __str__(self):
+	def __str__(self) -> str:
 		return self.template % self.name + ", ".join(self.levels)
 
 	def get_css(self, css_version) -> str:
@@ -557,7 +583,7 @@ class ListStyle(StyleBase):
 		return "\n".join(css_text)
 
 class Styles(UserDict):
-	"""Container for styles from the ODT document"""
+	"""Container for the styles from the ODF document"""
 
 	def __init__(self, opts:Odt2HtmlConfig, console:Console):
 		super().__init__()
@@ -573,7 +599,8 @@ class Styles(UserDict):
 		self.plugin_rules:list[str] = []
 
 	def load_font_face_decls(self, odt_font_face_decls:ET._Element) -> None:
-		"""<font-face-decls> are passed to this function"""
+		"""<office:font-face-decls> tags are passed to this function"""
+
 		for font_face in odt_font_face_decls:
 			assert font_face.tag == "style:font-face", font_face.tag
 			font_face_obj = FontFace(font_face)
@@ -690,10 +717,10 @@ class Styles(UserDict):
 		SPAN.frame { display: inline-block; float: none }
 
 		/* hack to join borders of adjacent paragraphs of a block quote */
-		P.Quotations {
+		BLOCKQUOTE.Quotations {
 			background-color: white;
 			}
-		P.Quotations + P.Quotations {
+		BLOCKQUOTE.Quotations + BLOCKQUOTE.Quotations {
 			padding-top: 4pt;
 			margin-top: -4pt;
 			border-top: none;
